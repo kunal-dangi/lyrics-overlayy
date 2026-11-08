@@ -1,36 +1,21 @@
-const http = require('http');
+const MAX_LINES = 150, MAX_CHARS = 8000, CHUNK = 25;
+const PER_IP_HOURLY = 30;
 
-const KEY = process.env.GROQ_API_KEY;
-const MODEL = process.env.MODEL || 'openai/gpt-oss-120b';
-const MAX_LINES = 150, MAX_CHARS = 8000;
-const PER_IP_HOURLY = 30, GLOBAL_DAILY = 2000;
-
+// Best-effort limiter: lives in one Worker instance's memory and can reset.
 const ipHits = new Map();
-let day = { date: '', count: 0 };
-
-function over(ip) {
-  const today = new Date().toISOString().slice(0, 10);
-  if (day.date !== today) day = { date: today, count: 0 };
-  if (++day.count > GLOBAL_DAILY) return true;
+function limited(ip) {
   const now = Date.now();
   const h = ipHits.get(ip);
-  if (!h || now > h.reset) { ipHits.set(ip, { n: 1, reset: now + 3600e3 }); return false; }
+  if (!h || now > h.reset) {
+    if (ipHits.size > 5000) ipHits.clear();
+    ipHits.set(ip, { n: 1, reset: now + 3600e3 });
+    return false;
+  }
   return ++h.n > PER_IP_HOURLY;
 }
 
-function send(res, code, obj) {
-  res.writeHead(code, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(obj));
-}
-
-async function readJson(req) {
-  let raw = '';
-  for await (const c of req) {
-    raw += c;
-    if (raw.length > 20000) throw new Error('too big');
-  }
-  return JSON.parse(raw);
-}
+const json = (obj, status = 200) =>
+  new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
 
 const clean = (v) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, 100) : '');
 
@@ -48,11 +33,16 @@ function buildPrompt(title, artist, lines) {
   );
 }
 
-async function callGroq(prompt) {
+async function callGroq(env, prompt) {
+  const model = env.MODEL || 'openai/gpt-oss-120b';
   const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${KEY}` },
-    body: JSON.stringify({ model: MODEL, messages: [{ role: 'user', content: prompt }], ...(MODEL.includes('gpt-oss') ? { reasoning_effort: 'low' } : {}) }),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.GROQ_API_KEY}` },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      ...(model.includes('gpt-oss') ? { reasoning_effort: 'low' } : {}),
+    }),
     signal: AbortSignal.timeout(30000),
   });
   if (!r.ok) throw new Error(`upstream ${r.status}`);
@@ -70,40 +60,47 @@ function parseResult(content, n) {
   }));
 }
 
-http.createServer(async (req, res) => {
-  if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true });
-  if (req.method !== 'POST' || req.url !== '/translate') return send(res, 404, { error: 'not found' });
-  if (!KEY) return send(res, 500, { error: 'server not configured' });
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true });
+    if (request.method !== 'POST' || url.pathname !== '/translate') return json({ error: 'not found' }, 404);
+    if (!env.GROQ_API_KEY) return json({ error: 'server not configured' }, 500);
 
-  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress).split(',')[0].trim();
-  if (over(ip)) return send(res, 429, { error: 'rate limited' });
+    const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+    if (limited(ip)) return json({ error: 'rate limited' }, 429);
 
-  try {
-    const body = await readJson(req);
-    const { lines } = body;
+    let body;
+    try {
+      const raw = await request.text();
+      if (raw.length > 20000) return json({ error: 'too big' }, 413);
+      body = JSON.parse(raw);
+    } catch (e) {
+      return json({ error: 'bad request' }, 400);
+    }
+
+    const { lines } = body || {};
     if (!Array.isArray(lines) || lines.length === 0 || lines.length > MAX_LINES ||
         lines.some((l) => typeof l !== 'string') || lines.join('').length > MAX_CHARS) {
-      return send(res, 400, { error: 'bad input' });
+      return json({ error: 'bad input' }, 400);
     }
+
     const title = clean(body.title), artist = clean(body.artist);
-    const CHUNK = 25;
     const chunks = [];
     for (let i = 0; i < lines.length; i += CHUNK) chunks.push(lines.slice(i, i + CHUNK));
 
     const translateChunk = async (chunk) => {
       let lastErr = null;
       for (let attempt = 0; attempt < 2; attempt++) {
-        try { return parseResult(await callGroq(buildPrompt(title, artist, chunk)), chunk.length); }
+        try { return parseResult(await callGroq(env, buildPrompt(title, artist, chunk)), chunk.length); }
         catch (e) { lastErr = e; }
       }
-      console.error('[translate] chunk failed:', lastErr && lastErr.message);
-      return chunk.map(() => ({ r: '', t: '' })); // blank for this chunk only
+      console.error('chunk failed:', lastErr && lastErr.message);
+      return chunk.map(() => ({ r: '', t: '' }));
     };
 
     const result = (await Promise.all(chunks.map(translateChunk))).flat();
-    if (result.every((x) => !x.t)) return send(res, 502, { error: 'translation failed' });
-    send(res, 200, { translations: result.map((x) => x.t), romanized: result.map((x) => x.r) });
-  } catch (e) {
-    send(res, 400, { error: 'bad request' });
-  }
-}).listen(process.env.PORT || 3000);
+    if (result.every((x) => !x.t)) return json({ error: 'translation failed' }, 502);
+    return json({ translations: result.map((x) => x.t), romanized: result.map((x) => x.r) });
+  },
+};

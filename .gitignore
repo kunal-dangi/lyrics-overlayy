@@ -3,3 +3,5 @@ node_modules/
 translation-cache.json
 *.bak*
 .DS_Store
+.wrangler/
+.dev.vars

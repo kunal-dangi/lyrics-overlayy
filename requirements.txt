@@ -1,0 +1,2 @@
+syncedlyrics
+urllib3<2

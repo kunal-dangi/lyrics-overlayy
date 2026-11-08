@@ -1,0 +1,14 @@
+{
+  "name": "lyric-overlay",
+  "version": "1.0.0",
+  "description": "Floating always-on-top synced lyrics overlay for Spotify (YouTube Music macOS client)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.3.3"
+  }
+}

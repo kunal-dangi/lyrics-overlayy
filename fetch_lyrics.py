@@ -12,7 +12,21 @@ main() — any failure just falls through to "NONE" so the caller doesn't
 have to special-case exceptions.
 """
 
+import re
 import sys
+
+
+def variants(title, artist):
+    t = re.sub(r"\s*[\(\[][^)\]]*[\)\]]", "", title)   # (feat. X), (From "Movie"), [Remastered]
+    t = re.sub(r"\s+-\s+.*$", "", t).strip() or title      # " - Remastered 2011"
+    first = re.split(r",|&| feat\.? | ft\.? ", artist, flags=re.I)[0].strip()
+    seen, out = set(), []
+    for q in (f"{t} {first}", f"{title} {artist}", t):
+        q = q.strip()
+        if q and q.lower() not in seen:
+            seen.add(q.lower())
+            out.append(q)
+    return out
 
 
 def main():
@@ -37,11 +51,15 @@ def main():
         print("NONE")
         return
 
-    try:
-        lrc = syncedlyrics.search(search_term, synced_only=True)
-    except Exception as e:
-        sys.stderr.write(f"lyrics lookup failed: {e}\n")
-        lrc = None
+    lrc = None
+    for q in variants(title, artist):
+        try:
+            lrc = syncedlyrics.search(q, synced_only=True)
+        except Exception as e:
+            sys.stderr.write(f"lyrics lookup failed for '{q}': {e}\n")
+            lrc = None
+        if lrc:
+            break
 
     if lrc:
         print(lrc)

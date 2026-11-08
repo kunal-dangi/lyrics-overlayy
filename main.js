@@ -107,7 +107,7 @@ function fetchLyrics(track) {
     execFile(
       pythonBin,
       [LYRICS_SCRIPT, track.artist || '', track.name || ''],
-      { timeout: 20000 },
+      { timeout: 45000 },
       (err, stdout, stderr) => {
         if (err) {
           console.error('[lyrics] lookup failed to run:', err.message);

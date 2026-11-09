@@ -36,6 +36,14 @@ window.kaset.onPalette((p) => {
   root.setProperty('--glow', p.glow);
 });
 
+// Sync tuning: BASE_OFFSET covers polling + animation delay; syncOffset is the per-song nudge from main.js
+const BASE_OFFSET = 0.25;
+let syncOffset = 0;
+window.kaset.onOffset((v) => {
+  syncOffset = Number(v) || 0;
+  shownIndex = -1; // redraw with the new timing
+});
+
 // --- Word layout: pick a hero word, size the rest around it -------------------
 
 const SMALL = new Set((
@@ -147,7 +155,7 @@ function findCurrentIndex(pos) {
 
 function tick() {
   if (lyricsLines) {
-    const pos = estimatedPosition();
+    const pos = estimatedPosition() + BASE_OFFSET + syncOffset;
     let want = findCurrentIndex(pos);
     if (want >= 0) {
       // During long instrumental gaps, clear the line after 9s instead of leaving it stuck

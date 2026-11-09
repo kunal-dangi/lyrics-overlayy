@@ -1,8 +1,9 @@
 const { app, BrowserWindow, ipcMain, screen, nativeImage, nativeTheme } = require('electron');
+const { globalShortcut } = require('electron');
 const path = require('path');
 const { exec, execFile } = require('child_process');
 const fs = require('fs');
-const TRANSLATION_CACHE_PATH = path.join(__dirname, 'translation-cache.json');
+const TRANSLATION_CACHE_PATH = path.join(app.getPath('userData'), 'translation-cache.json');
 const TRANSLATE_URL = process.env.TRANSLATE_URL || 'https://lyric-overlay-api.kunaldangi.workers.dev/translate';
 const POLL_INTERVAL_MS = 1000;
 const TEXT_MODE = 'dark'; // 'auto' (follow macOS appearance) | 'light' text | 'dark' text
@@ -16,6 +17,20 @@ if (!gotLock) app.quit();
 let win;
 let pollTimer;
 let currentVideoId = null;
+const retriedTracks = new Set(); // tracks already retried once after an empty lookup
+
+// Per-song sync nudge in seconds, saved so a fixed song stays fixed
+const OFFSETS_PATH = path.join(app.getPath('userData'), 'sync-offsets.json');
+let syncOffsets = {};
+try { syncOffsets = JSON.parse(fs.readFileSync(OFFSETS_PATH, 'utf8')); } catch (e) { /* none saved yet */ }
+
+function nudgeSync(delta) {
+  if (!currentVideoId) return;
+  const next = delta === 0 ? 0 : Math.round(((syncOffsets[currentVideoId] || 0) + delta) * 100) / 100;
+  if (next === 0) delete syncOffsets[currentVideoId]; else syncOffsets[currentVideoId] = next;
+  try { fs.writeFileSync(OFFSETS_PATH, JSON.stringify(syncOffsets)); } catch (e) { console.error('[sync] save failed:', e.message); }
+  if (win) win.webContents.send('offset', next);
+}
 let fetchGeneration = 0; // guards against a slow lookup overwriting a newer track
 
 function createWindow() {
@@ -101,7 +116,7 @@ function parseLRC(lrc) {
   return lines.filter((l) => l.text); // drop blank timing-only lines
 }
 
-function fetchLyrics(track) {
+function fetchLyricsPython(track) {
   return new Promise((resolve) => {
     const pythonBin = process.env.LYRICS_PYTHON_BIN || 'python3';
     execFile(
@@ -129,6 +144,86 @@ function fetchLyrics(track) {
   });
 }
 
+// --- Lyrics via LRCLIB (pure Node, works inside a packaged app) ---------
+
+const LRCLIB_UA = 'lyrics-overlay (https://github.com/kunal-dangi/lyrics-overlayy)';
+const PYTHON_FALLBACK = !__dirname.includes('.asar'); // source installs only
+
+function lyricQueries(track) {
+  const title = (track.name || '').trim();
+  const artist = (track.artist || '').trim();
+  const cleanTitle =
+    title.replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s+-\s+.*$/, '').trim() || title;
+  const firstArtist = artist.split(/,|&| feat\.? | ft\.? /i)[0].trim();
+  const seen = new Set();
+  return [[cleanTitle, firstArtist], [title, artist]].filter(([t, a]) => {
+    const k = `${t}|${a}`.toLowerCase();
+    if (!t || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+const DURATION_TOLERANCE = 3; // seconds; a different edit of the song makes lyrics drift
+
+const norm = (s) =>
+  String(s || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
+
+// LRCLIB search is fuzzy, so reject results that are a different song
+function sameSong(r, track) {
+  const rt = norm(r.trackName), ra = norm(r.artistName);
+  const queries = lyricQueries(track);
+  const titleOk = !!rt && queries.some(([t]) => { const n = norm(t); return n && (rt.includes(n) || n.includes(rt)); });
+  const firstArtist = queries[0] ? norm(queries[0][1]) : '';
+  const fullArtist = norm(track.artist);
+  const artistOk = !fullArtist || (!!ra && (
+    (firstArtist && (ra.includes(firstArtist) || firstArtist.includes(ra))) ||
+    fullArtist.includes(ra) || ra.includes(fullArtist)
+  ));
+  return titleOk && artistOk;
+}
+
+async function lrclibSearch(params, duration, track) {
+  const resp = await fetch('https://lrclib.net/api/search?' + new URLSearchParams(params), {
+    headers: { 'User-Agent': LRCLIB_UA },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (resp.status >= 500) throw new Error('LRCLIB ' + resp.status);
+  if (!resp.ok) return null;
+  const results = await resp.json();
+  if (!Array.isArray(results)) return null;
+  const synced = results.filter(
+    (r) => r && typeof r.syncedLyrics === 'string' && r.syncedLyrics.trim() && sameSong(r, track)
+  );
+  if (synced.length === 0) return null;
+  if (!duration) return synced[0].syncedLyrics;
+  synced.sort((a, b) => Math.abs(a.duration - duration) - Math.abs(b.duration - duration));
+  return Math.abs(synced[0].duration - duration) <= DURATION_TOLERANCE ? synced[0].syncedLyrics : null;
+}
+
+async function fetchLyrics(track, duration) {
+  const queries = lyricQueries(track).map(([t, a]) => ({ track_name: t, artist_name: a }));
+  if (queries[0]) queries.push({ q: `${queries[0].track_name} ${queries[0].artist_name}`.trim() });
+  for (const params of queries) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const lrc = await lrclibSearch(params, duration, track);
+        const parsed = lrc ? parseLRC(lrc) : [];
+        if (parsed.length > 0) return parsed;
+        break; // got an answer, just no match: try the next query
+      } catch (e) {
+        console.error('[lyrics] lrclib lookup failed:', e.message);
+        await new Promise((r) => setTimeout(r, 700)); // one quick retry for network hiccups
+      }
+    }
+  }
+  if (!PYTHON_FALLBACK) return null;
+  const py = await fetchLyricsPython(track);
+  // the Python providers don't verify the song: drop lyrics that run longer than the track
+  if (py && duration && py[py.length - 1].time > duration + 3) return null;
+  return py;
+}
+
 function loadTranslationCache() {
   try {
     return JSON.parse(fs.readFileSync(TRANSLATION_CACHE_PATH, 'utf8'));
@@ -146,7 +241,7 @@ function saveTranslationCache(cache) {
 }
 
 async function translateLines(lines, track) {
-  const cacheKey = 'v2:' + (track.videoId || `${track.artist}::${track.name}`);
+  const cacheKey = 'v3:' + (track.videoId || `${track.artist}::${track.name}`);
   const cache = loadTranslationCache();
   const apply = (tr, ro) => lines.map((l, i) => ({ ...l, translated: tr[i] || '', romanized: ro[i] || '' }));
   const hit = cache[cacheKey];
@@ -246,6 +341,7 @@ async function pollLoop() {
 
   if (track.videoId !== currentVideoId) {
     currentVideoId = track.videoId;
+    win.webContents.send('offset', syncOffsets[currentVideoId] || 0);
     setPaletteFromArtwork(track.artwork);
     const myGeneration = ++fetchGeneration;
 
@@ -257,12 +353,17 @@ async function pollLoop() {
       duration: info.duration,
     });
 
-    const lyrics = await fetchLyrics(track);
+    const lyrics = await fetchLyrics(track, info.duration);
 
     if (myGeneration !== fetchGeneration) return; // a newer track started meanwhile
 
     if (!lyrics) {
       win.webContents.send('lyrics', null);
+      if (!retriedTracks.has(track.videoId)) {
+        // a network hiccup looks the same as "no lyrics": look once more shortly after
+        retriedTracks.add(track.videoId);
+        setTimeout(() => { if (currentVideoId === track.videoId) currentVideoId = null; }, 6000);
+      }
       return; // no synced lyrics — leave the window hidden entirely
     }
 
@@ -286,10 +387,16 @@ async function pollLoop() {
 app.whenReady().then(() => {
   if (!gotLock) return;
   createWindow();
+  // Lyrics out of sync? Ctrl+Option+. shows them earlier, Ctrl+Option+, later, Ctrl+Option+/ resets
+  globalShortcut.register('Control+Alt+.', () => nudgeSync(0.25));
+  globalShortcut.register('Control+Alt+,', () => nudgeSync(-0.25));
+  globalShortcut.register('Control+Alt+/', () => nudgeSync(0));
   fetch(TRANSLATE_URL.replace('/translate', '/health')).catch(() => {}); // wake the free Render instance
   pollLoop();
   pollTimer = setInterval(pollLoop, POLL_INTERVAL_MS);
 });
+
+app.on('will-quit', () => globalShortcut.unregisterAll());
 
 app.on('window-all-closed', () => {
   clearInterval(pollTimer);

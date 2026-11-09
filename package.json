@@ -3,29 +3,38 @@
   "version": "1.0.0",
   "description": "Spotify Lyrics Overlay",
   "main": "main.js",
-
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --mac dmg"
   },
-
   "devDependencies": {
     "electron": "^28.3.3",
-    "electron-builder": "^26.0.0"
+    "electron-builder": "^26.18.0"
   },
-
   "build": {
     "appId": "com.kunaldangi.lyricoverlay",
     "productName": "Lyrics Overlay",
-
     "mac": {
-      "target": ["dmg"],
-      "category": "public.app-category.music"
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.music",
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "Lyrics Overlay reads the current track and playback position from Spotify."
+      },
+      "identity": null
     },
-
     "dmg": {
       "title": "Lyrics Overlay",
       "iconSize": 100
-    }
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "index.html",
+      "style.css",
+      "package.json"
+    ]
   }
 }

@@ -23,11 +23,11 @@ function buildPrompt(title, artist, lines) {
   const numbered = lines.map((l, i) => `${i + 1}. ${l}`).join('\n');
   return (
     `You are helping someone follow along with a song${title ? `: "${title}"` : ''}${artist ? ` by ${artist}` : ''}.\n` +
-    'The lyrics below are one line per item. They are probably Hindi, Urdu or Punjabi, written in Urdu or Devanagari script, or romanized Hinglish, or already English.\n\n' +
+    'The lyrics below are one line per item. They can be in ANY language or script (for example Hindi, Urdu, Punjabi in Gurmukhi or Shahmukhi, Bengali, Tamil, Spanish, Korean, Japanese, Chinese, Arabic, Russian), romanized, mixed, or already English.\n\n' +
     'For each line return:\n' +
-    '- "r": the line romanized in simple chat-style Latin letters (like Hinglish typed on a phone). Only when the line is in a non-Latin script; otherwise "".\n' +
+    '- "r": a romanized version in Latin letters, ONLY when the line is written in a non-Latin script. Keep it simple and readable, the way a native speaker would type it on a phone (Hinglish style for Hindi, Urdu and Punjabi; pinyin for Chinese; romaji for Japanese; standard romanization for Korean and others). If the line is already in Latin letters, use "".\n' +
     '- "t": a natural English translation of the meaning: plain and poetic, not word for word. If the line is already English, return it unchanged.\n\n' +
-    'Use the whole song for context so pronouns, metaphors and repeated phrases stay consistent. One output item per input line: never merge, split or skip lines.\n' +
+    'Lines in Latin letters can still be another language (Spanish, French, Portuguese, romanized Punjabi, Hinglish and so on), so translate those into English too. Use the whole song for context so pronouns, metaphors and repeated phrases stay consistent. One output item per input line: never merge, split or skip lines.\n' +
     `Reply with ONLY a JSON array of exactly ${lines.length} objects like [{"r":"...","t":"..."}], in the same order as the input.\n\n` +
     'Lyrics:\n' + numbered
   );

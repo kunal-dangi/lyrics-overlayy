@@ -96,7 +96,10 @@ npm start
 Play a song in Spotify that has synced lyrics. The overlay should appear on the left side of the screen within a couple of seconds.
 
 ---
-
+## If apple throws an error of file damaged
+```bash
+xattr -cr /Applications/Lyrics\ Overlay.app
+```
 ## Automated startup (recommended)
 
 Instead of running `npm start` every time, you can register a background watcher that automatically starts the overlay when Spotify opens and quits it when Spotify quits.

@@ -99,3 +99,127 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .w, .line.out .w, .line.out .tr { transform: none; }
 }
+
+/* ===== Random looks: renderer.js sets data-style on #stage for each new song ===== */
+@keyframes chIn { to { opacity: 1; } }
+@keyframes kword { to { color: var(--ink); } }
+@keyframes pop {
+  0%   { opacity: 0; transform: scale(0.4) rotate(-6deg); }
+  60%  { opacity: 1; transform: scale(1.14) rotate(1deg); }
+  100% { transform: none; }
+}
+
+/* flow lines (typewriter, karaoke): normal wrapping text instead of one word per row */
+.row.flow {
+  white-space: normal; width: 30vw;
+  font-size: calc(var(--u) * 1.05 * var(--fit, 1));
+  font-weight: 800; line-height: 1.12; letter-spacing: -0.01em;
+  opacity: 0; transition: opacity 0.25s ease;
+}
+.line.in .row.flow { opacity: 1; }
+.line.out .row.flow { opacity: 0; transition-duration: 0.15s; }
+.ch { opacity: 0; }
+.line.in .ch { animation: chIn 0.01s steps(1) forwards; }
+.kw { opacity: 0.5; transition: opacity 0.15s ease; }
+.kw.now { opacity: 1; }
+#stage.paused .kw { animation-play-state: paused; }
+#stage[data-style="typewriter"] .row.flow { font-family: "American Typewriter", "Courier New", Courier, monospace; font-weight: 700; letter-spacing: 0; }
+
+/* outline */
+#stage[data-style="outline"] .t3 .w { background: none; color: transparent; padding: 0; text-shadow: none; -webkit-text-stroke: 0.045em var(--ink); }
+
+/* marker */
+#stage[data-style="marker"] .t3 .w {
+  background: linear-gradient(transparent 42%, color-mix(in srgb, var(--box) 38%, transparent) 42% 92%, transparent 92%);
+  color: var(--ink); padding: 0 0.12em; border-radius: 0.06em; text-shadow: none;
+}
+#stage[data-style="marker"] .line.in .t3 .w { transform: rotate(-2deg); }
+
+/* underline */
+#stage[data-style="underline"] .t3 .w {
+  background: none; color: var(--ink); padding: 0; text-shadow: none;
+  text-decoration: underline; text-decoration-thickness: 0.1em; text-decoration-color: var(--box);
+  text-underline-offset: 0.1em; text-decoration-skip-ink: none;
+}
+
+/* editorial */
+#stage[data-style="editorial"] .row { font-family: "Didot", "Bodoni 72", Georgia, serif; font-style: italic; font-weight: 500; letter-spacing: 0; }
+#stage[data-style="editorial"] .t3 .w { background: none; color: var(--ink); padding: 0; text-shadow: none; font-weight: 700; box-shadow: inset 0 -0.07em 0 var(--ink); }
+
+/* poster */
+#stage[data-style="poster"] .row { font-family: "Impact", "Haettenschweiler", "Arial Narrow Bold", sans-serif; font-weight: 400; text-transform: uppercase; letter-spacing: 0.01em; line-height: 0.92; }
+#stage[data-style="poster"] .t3 .w { padding: 0.02em 0.18em 0.04em; }
+#stage[data-style="poster"] .line.in .t3 .w { transform: rotate(-3deg); }
+
+/* handwritten */
+#stage[data-style="handwritten"] .row { font-family: "Bradley Hand", "Marker Felt", "Noteworthy", cursive; font-weight: 700; letter-spacing: 0.01em; }
+#stage[data-style="handwritten"] .row:nth-child(odd) { rotate: -1.2deg; }
+#stage[data-style="handwritten"] .row:nth-child(even) { rotate: 1deg; }
+#stage[data-style="handwritten"] .t3 .w {
+  background: none; color: var(--ink); padding: 0; text-shadow: none;
+  text-decoration: underline wavy var(--box); text-decoration-thickness: 0.06em; text-underline-offset: 0.14em;
+}
+
+/* pop */
+#stage[data-style="pop"] .line.in .w { transition: none; animation: pop 0.55s cubic-bezier(0.2, 1.5, 0.3, 1) var(--d, 0ms) backwards; }
+#stage[data-style="pop"] .line.out .w { animation: none; opacity: 0; transform: translateY(-0.25em); }
+
+/* card */
+#stage[data-style="card"] .stack {
+  background: color-mix(in srgb, var(--box) 90%, transparent);
+  padding: calc(var(--u) * var(--fit, 1) * 0.5) calc(var(--u) * var(--fit, 1) * 0.75);
+  border-radius: calc(var(--u) * var(--fit, 1) * 0.4);
+}
+#stage[data-style="card"] .row, #stage[data-style="card"] .tr { color: var(--box-ink); text-shadow: none; }
+#stage[data-style="card"] .t3 .w { background: var(--box-ink); color: var(--box); }
+
+/* ===== Entrances, shapes and shades (the block always stays in the same spot) ===== */
+:root {
+  /* fallback shades until renderer.js sets the real ones from the album art */
+  --ink-alt: color-mix(in srgb, var(--ink) 62%, white);
+  --box-alt: color-mix(in srgb, var(--box) 70%, white);
+}
+.line.alt { --box: var(--box-alt); }
+.line.alt .row { --ink: var(--ink-alt); }
+
+.w, .tr { transition: opacity 0.35s ease, transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.45s ease, letter-spacing 0.5s ease, clip-path 0.55s ease; }
+.line.in .w, .line.in .tr { filter: none; }
+
+/* where each word starts FROM: always within a word or so of its final place */
+.line.e-rise:not(.in)  .w { transform: translateY(0.5em); }
+.line.e-climb:not(.in) .w { transform: translateY(0.5em); }
+.line.e-drop:not(.in)  .w { transform: translateY(-0.5em); }
+.line.e-slide:not(.in) .row:nth-child(odd) .w  { transform: translateX(-0.6em); }
+.line.e-slide:not(.in) .row:nth-child(even) .w { transform: translateX(0.6em); }
+.line.e-focus:not(.in) .w { transform: scale(1.06); filter: blur(8px); }
+.line.e-track:not(.in) .w { transform: none; letter-spacing: 0.3em; }
+.line.e-flip:not(.in)  .w { transform: perspective(500px) rotateX(-80deg); transform-origin: 50% 100%; }
+.line.e-wipe:not(.in)  .w { transform: none; clip-path: inset(-30% 100% -30% -15%); }
+.line.e-wipe.in .w        { clip-path: inset(-30% -15% -30% -15%); }
+
+/* text-block looks (typewriter, karaoke) */
+.row.flow { transition: opacity 0.3s ease, transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.45s ease; }
+.line.e-rise:not(.in)  .row.flow { transform: translateY(0.5em); }
+.line.e-drop:not(.in)  .row.flow { transform: translateY(-0.5em); }
+.line.e-focus:not(.in) .row.flow { transform: scale(1.04); filter: blur(8px); }
+.line.in .row.flow { filter: none; }
+
+/* shape: horizontal, words side by side */
+.line.sh-row .stack { flex-direction: row; flex-wrap: wrap; align-items: baseline; align-content: flex-start; column-gap: calc(var(--u) * var(--fit, 1) * 0.3); width: 30vw; }
+.line.sh-row .tr { flex-basis: 100%; max-width: none; }
+
+/* shape: diagonal staircase */
+.line.sh-stair .stack { rotate: -2.5deg; }
+.line.sh-stair.d-up .stack { rotate: 2.5deg; }
+.line.sh-stair .row { margin-left: calc(var(--r, 0) * var(--u) * var(--fit, 1) * 0.45); }
+.line.sh-stair.d-up .row { margin-left: calc((var(--n, 1) - 1 - var(--r, 0)) * var(--u) * var(--fit, 1) * 0.45); }
+
+/* shape: zigzag, alternating sides */
+.line.sh-zigzag .stack { width: 30vw; }
+.line.sh-zigzag .row:nth-child(even) { align-self: flex-end; }
+
+/* word-by-word: the whole line sits at 50%, the word being sung is at 100% */
+.line.wsync .w { transition: opacity 0.15s ease, transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.45s ease, letter-spacing 0.5s ease, clip-path 0.55s ease; }
+.line.in.wsync .w { opacity: 0.5; }
+.line.in.wsync .w.now { opacity: 1; }
+.line.out.wsync .w, .line.out.wsync .w.now { opacity: 0; }

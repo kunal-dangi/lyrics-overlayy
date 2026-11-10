@@ -15,6 +15,7 @@
     "appId": "com.kunaldangi.lyricoverlay",
     "productName": "Lyrics Overlay",
     "mac": {
+      "icon": "build/icon.png",
       "target": [
         "dmg"
       ],
@@ -23,6 +24,12 @@
         "NSAppleEventsUsageDescription": "Lyrics Overlay reads the current track and playback position from Spotify."
       },
       "identity": null
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis"
+      ]
     },
     "dmg": {
       "title": "Lyrics Overlay",

@@ -5,3 +5,4 @@ translation-cache.json
 .DS_Store
 .wrangler/
 .dev.vars
+dist/

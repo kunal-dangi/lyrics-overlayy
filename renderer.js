@@ -23,6 +23,7 @@ window.kaset.onLyrics((data) => {
     return;
   }
   lyricsLines = next;
+  pickStyle();
   shownIndex = -1;
   if (currentEl) currentEl.remove();
   currentEl = null;
@@ -34,6 +35,16 @@ window.kaset.onPalette((p) => {
   root.setProperty('--box', p.box);
   root.setProperty('--box-ink', p.boxInk);
   root.setProperty('--glow', p.glow);
+  // a lighter or darker shade of the same hue (not transparency) for the alternate lines
+  const shade = (c, amount) => {
+    const m = /hsl\(\s*(\d+),\s*(\d+)%,\s*(\d+)%\s*\)/.exec(c);
+    if (!m) return c;
+    const l = +m[3];
+    const nl = l < 50 ? Math.min(l + amount, 85) : Math.max(l - amount, 20);
+    return `hsl(${m[1]}, ${m[2]}%, ${nl}%)`;
+  };
+  root.setProperty('--ink-alt', shade(p.ink, 24));
+  root.setProperty('--box-alt', shade(p.box, 18));
 });
 
 // Sync tuning: BASE_OFFSET covers polling + animation delay; syncOffset is the per-song nudge from main.js
@@ -43,6 +54,161 @@ window.kaset.onOffset((v) => {
   syncOffset = Number(v) || 0;
   shownIndex = -1; // redraw with the new timing
 });
+
+// --- Random look per song: pickStyle() runs when a new song's lyrics arrive ------
+
+const STYLES = ['boxed', 'outline', 'marker', 'underline', 'typewriter', 'karaoke',
+                'editorial', 'poster', 'handwritten', 'pop'];
+const FORCE_STYLE = null; // set e.g. 'karaoke' while tuning one look
+const FLOW_STYLES = new Set(['typewriter', 'karaoke']); // normal wrapping text, not one word per row
+let currentStyle = 'boxed';
+
+function pickStyle() {
+  const choices = STYLES.filter((s) => s !== currentStyle);
+  currentStyle = FORCE_STYLE || choices[Math.floor(Math.random() * choices.length)];
+  stage.dataset.style = currentStyle;
+  if (!MOTION_PER_LINE) currentMotion = null; // new song, new motion
+}
+
+function buildFlowLine(text, translated, dur, elapsed) {
+  const line = document.createElement('div');
+  line.className = 'line';
+  const stack = document.createElement('div');
+  stack.className = 'stack';
+  const row = document.createElement('div');
+  row.className = 'row flow';
+
+  if (currentStyle === 'karaoke') {
+    // words fill in one after another across the line's duration
+    const words = text.split(/\s+/).filter(Boolean);
+    const total = words.reduce((n, w) => n + w.length + 1, 0);
+    let before = 0;
+    words.forEach((word, i) => {
+      const kw = document.createElement('span');
+      kw.className = 'kw';
+      kw.textContent = word + (i < words.length - 1 ? ' ' : '');
+      kw.style.animationDelay = ((before / total) * dur * 0.9 - elapsed).toFixed(2) + 's';
+      row.appendChild(kw);
+      before += word.length + 1;
+    });
+  } else {
+    // typewriter: letters appear one by one
+    const step = Math.max(12, Math.min(40, 1100 / Math.max(text.length, 1)));
+    Array.from(text).forEach((c, i) => {
+      const ch = document.createElement('span');
+      ch.className = 'ch';
+      ch.textContent = c;
+      ch.style.animationDelay = Math.round(150 + i * step) + 'ms';
+      row.appendChild(ch);
+    });
+  }
+  stack.appendChild(row);
+
+  if (translated && translated.trim().toLowerCase() !== text.trim().toLowerCase()) {
+    const tr = document.createElement('div');
+    tr.className = 'tr';
+    tr.textContent = translated;
+    tr.style.transitionDelay = '400ms';
+    stack.appendChild(tr);
+  }
+  line.appendChild(stack);
+  return line;
+}
+
+// --- Entrance, shape and shade for every line. The block always stays in the same spot ---
+
+const MOTION_PER_LINE = true;  // false = one entrance per song
+const FORCE_MOTION = null;     // set e.g. 'wipe' while tuning one entrance
+const SHAPES_ENABLED = true;   // false = always the one-word-per-row stack
+const ENTRANCES = ['rise', 'drop', 'slide', 'wipe', 'focus', 'track', 'flip', 'climb'];
+const FLOW_ENTRANCES = ['rise', 'drop', 'focus'];
+const SHAPES = ['stack', 'stack', 'row', 'stair', 'zigzag']; // stack twice so it stays the most common
+let currentMotion = null;
+let lastShape = 'stack';
+let shadeHistory = [];
+
+function pickMotion() {
+  if (!MOTION_PER_LINE && currentMotion) return currentMotion;
+  const choices = ENTRANCES.filter((m) => m !== currentMotion);
+  currentMotion = FORCE_MOTION || choices[Math.floor(Math.random() * choices.length)];
+  return currentMotion;
+}
+
+function pickShape() {
+  if (!SHAPES_ENABLED) return 'stack';
+  let s = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+  if (s !== 'stack' && s === lastShape) s = 'stack';
+  lastShape = s;
+  return s;
+}
+
+// random main / alternate shade, but never 3 of the same in a row
+function pickAlt() {
+  let alt = Math.random() < 0.5;
+  const n = shadeHistory.length;
+  if (n >= 2 && shadeHistory[n - 1] === shadeHistory[n - 2] && shadeHistory[n - 1] === alt) alt = !alt;
+  shadeHistory.push(alt);
+  if (shadeHistory.length > 4) shadeHistory.shift();
+  return alt;
+}
+
+function decorate(line) {
+  const flow = FLOW_STYLES.has(currentStyle);
+  const motion = flow ? FLOW_ENTRANCES[Math.floor(Math.random() * FLOW_ENTRANCES.length)] : pickMotion();
+  const shape = flow ? 'stack' : pickShape();
+  line.classList.add('e-' + motion, 'sh-' + shape);
+  if (shape === 'stair' && Math.random() < 0.5) line.classList.add('d-up');
+  if (pickAlt()) line.classList.add('alt');
+
+  const rows = line.querySelectorAll('.row');
+  rows.forEach((row, i) => row.style.setProperty('--r', i));
+  line.style.setProperty('--n', rows.length);
+  if (motion === 'climb') {
+    // the bottom row appears first and the stack builds upward
+    rows.forEach((row, i) => {
+      const d = 130 + (rows.length - 1 - i) * 55;
+      row.querySelectorAll('.w').forEach((w) => {
+        w.style.transitionDelay = d + 'ms';
+        w.style.setProperty('--d', d + 'ms');
+      });
+    });
+  }
+}
+
+// --- Word-by-word highlight (estimated timing) -------------------------------------
+
+const WORD_SYNC = true;   // false = no word highlight (the karaoke look always uses it)
+const WORD_SPAN = 0.85;   // share of a line's time spent singing; the rest is the pause before the next line
+
+function setupWordSync(line, dur) {
+  line._sync = null;
+  const karaoke = currentStyle === 'karaoke';
+  if (!WORD_SYNC && !karaoke) return;
+  const els = Array.from(line.querySelectorAll(karaoke ? '.kw' : '.w'));
+  if (els.length === 0) return;
+  // longer words get more of the line's time
+  const weights = els.map((el) => Math.max(el.textContent.replace(/\s+/g, '').length, 1) + 1);
+  const total = weights.reduce((a, b) => a + b, 0);
+  let acc = 0;
+  const starts = weights.map((w) => { const s = (acc / total) * dur * WORD_SPAN; acc += w; return s; });
+  line._sync = { els, starts, idx: -2 };
+  line.classList.add('wsync');
+  // the entrance stagger would also delay the highlight, so drop it once the line has settled
+  setTimeout(() => els.forEach((el) => { el.style.transitionDelay = '0ms'; }), 1200);
+}
+
+function updateWordSync(pos) {
+  const s = currentEl && currentEl._sync;
+  if (!s || shownIndex < 0 || !lyricsLines || !lyricsLines[shownIndex]) return;
+  const rel = pos - lyricsLines[shownIndex].time;
+  let idx = -1;
+  for (let i = 0; i < s.starts.length; i++) {
+    if (s.starts[i] <= rel) idx = i; else break;
+  }
+  if (idx === s.idx) return;
+  s.idx = idx;
+  s.els.forEach((el, i) => el.classList.toggle('now', i === idx));
+}
 
 // --- Word layout: pick a hero word, size the rest around it -------------------
 
@@ -89,6 +255,7 @@ function buildLine(text, translated) {
     w.className = 'w';
     w.textContent = r.text;
     w.style.transitionDelay = 130 + i * 55 + 'ms';
+    w.style.setProperty('--d', 130 + i * 55 + 'ms');
     row.appendChild(w);
     stack.appendChild(row);
   });
@@ -110,16 +277,20 @@ function fit(line) {
   const f = Math.min(
     1,
     (window.innerHeight * 0.78) / stack.offsetHeight,
-    (window.innerWidth * 0.30) / stack.offsetWidth
+    (window.innerWidth * 0.30) / Math.max(stack.offsetWidth, stack.scrollWidth)
   );
   line.style.setProperty('--fit', f.toFixed(3));
 }
 
-function showLine(text, translated) {
+function showLine(text, translated, dur = 4, elapsed = 0) {
   const old = currentEl;
-  const line = buildLine(text, translated);
+  const line = FLOW_STYLES.has(currentStyle)
+    ? buildFlowLine(text, translated, dur, elapsed)
+    : buildLine(text, translated);
+  decorate(line);
   stage.appendChild(line);
   fit(line);
+  setupWordSync(line, dur);
   requestAnimationFrame(() => requestAnimationFrame(() => line.classList.add('in')));
   if (old) retire(old);
   currentEl = line;
@@ -165,9 +336,14 @@ function tick() {
     }
     if (want !== shownIndex) {
       shownIndex = want;
-      if (want >= 0) showLine(lyricsLines[want].romanized || lyricsLines[want].text, lyricsLines[want].translated);
+      if (want >= 0) {
+        const cur = lyricsLines[want], nxt = lyricsLines[want + 1];
+        const dur = Math.max(1.5, Math.min(nxt ? nxt.time - cur.time : 4, 9));
+        showLine(cur.romanized || cur.text, cur.translated, dur, Math.max(0, pos - cur.time));
+      }
       else hideLine();
     }
+    updateWordSync(pos);
   }
   requestAnimationFrame(tick);
 }

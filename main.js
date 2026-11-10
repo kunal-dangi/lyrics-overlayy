@@ -3,12 +3,13 @@ const { globalShortcut } = require('electron');
 const path = require('path');
 const { exec, execFile } = require('child_process');
 const fs = require('fs');
+const process = require('process');
+
 const TRANSLATION_CACHE_PATH = path.join(app.getPath('userData'), 'translation-cache.json');
 const TRANSLATE_URL = process.env.TRANSLATE_URL || 'https://lyric-overlay-api.kunaldangi.workers.dev/translate';
 const POLL_INTERVAL_MS = 1000;
 const TEXT_MODE = 'dark'; // 'auto' (follow macOS appearance) | 'light' text | 'dark' text
 const LYRICS_SCRIPT = path.join(__dirname, 'fetch_lyrics.py');
-console.log('[diag] fetch is:', typeof fetch);
 
 // Only one overlay at a time: a second copy would draw the same lyrics on top of the first
 const gotLock = app.requestSingleInstanceLock();
@@ -17,12 +18,11 @@ if (!gotLock) app.quit();
 let win;
 let pollTimer;
 let currentVideoId = null;
-const retriedTracks = new Set(); // tracks already retried once after an empty lookup
+const retriedTracks = new Set();
 
-// Per-song sync nudge in seconds, saved so a fixed song stays fixed
 const OFFSETS_PATH = path.join(app.getPath('userData'), 'sync-offsets.json');
 let syncOffsets = {};
-try { syncOffsets = JSON.parse(fs.readFileSync(OFFSETS_PATH, 'utf8')); } catch (e) { /* none saved yet */ }
+try { syncOffsets = JSON.parse(fs.readFileSync(OFFSETS_PATH, 'utf8')); } catch (e) { }
 
 function nudgeSync(delta) {
   if (!currentVideoId) return;
@@ -31,14 +31,19 @@ function nudgeSync(delta) {
   try { fs.writeFileSync(OFFSETS_PATH, JSON.stringify(syncOffsets)); } catch (e) { console.error('[sync] save failed:', e.message); }
   if (win) win.webContents.send('offset', next);
 }
-let fetchGeneration = 0; // guards against a slow lookup overwriting a newer track
+let fetchGeneration = 0;
 
 function createWindow() {
   const { x, y, width, height } = screen.getPrimaryDisplay().bounds;
 
   win = new BrowserWindow({
-    x, y, width, height,
-    type: 'desktop', // macOS: wallpaper level, below icons and all windows
+    x,
+    y,
+    width,
+    height,
+    icon: path.join(__dirname, 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
+    type: process.platform === 'darwin' ? 'desktop' : 'toolbar',
+    alwaysOnTop: process.platform === 'win32',
     frame: false,
     transparent: true,
     hasShadow: false,
@@ -46,7 +51,7 @@ function createWindow() {
     movable: false,
     focusable: false,
     skipTaskbar: true,
-    show: false, // stays hidden until a track with synced lyrics is confirmed
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -61,7 +66,7 @@ function createWindow() {
   });
 }
 
-// --- Spotify AppleScript bridge -------------------------------------------
+// --- Cross-Platform Media Bridge -------------------------------------------
 
 const SPOTIFY_SCRIPT = `
 if application "Spotify" is running then
@@ -80,23 +85,76 @@ end if
 
 function getPlayerInfo() {
   return new Promise((resolve, reject) => {
-    execFile('osascript', ['-e', SPOTIFY_SCRIPT], { timeout: 3000 }, (err, stdout) => {
-      if (err) return reject(err);
-      const out = stdout.trim();
-      if (!out || out === 'closed' || out === 'stopped') return reject(new Error('not playing'));
-      const [id, name, artist, pos, dur, state, art] = out.split('||');
-      resolve({
-        currentTrack: { videoId: id, name, artist, artwork: art },
-        isPlaying: state === 'playing',
-        position: parseFloat(pos.replace(',', '.')),
-        duration: parseFloat(dur.replace(',', '.')) / 1000, // Spotify gives ms
+
+    // 🍎 macOS: AppleScript Integration
+    if (process.platform === 'darwin') {
+      execFile('osascript', ['-e', SPOTIFY_SCRIPT], { timeout: 3000 }, (err, stdout) => {
+        if (err) return reject(err);
+        const out = stdout.trim();
+        if (!out || out === 'closed' || out === 'stopped') return reject(new Error('not playing'));
+        const [id, name, artist, pos, dur, state, art] = out.split('||');
+        resolve({
+          currentTrack: { videoId: id, name, artist, artwork: art },
+          isPlaying: state === 'playing',
+          position: parseFloat(pos.replace(',', '.')),
+          duration: parseFloat(dur.replace(',', '.')) / 1000,
+        });
       });
-    });
+    }
+
+    // 🪟 Windows: Zero-Dependency PowerShell Polling
+    else if (process.platform === 'win32') {
+      const psCommand = `Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object Name, MainWindowTitle | ConvertTo-Json -Compress`;
+
+      exec(`powershell -NoProfile -Command "${psCommand}"`, { timeout: 3000 }, (error, stdout) => {
+        if (error || !stdout) return reject(new Error('not playing'));
+
+        try {
+          const procs = JSON.parse(stdout.trim());
+          const procList = Array.isArray(procs) ? procs : [procs];
+          let title = '';
+          let artist = '';
+
+          // 1. Try Spotify App
+          const spotify = procList.find(p => p.Name.toLowerCase() === 'spotify' && p.MainWindowTitle.includes(' - '));
+          if (spotify && !spotify.MainWindowTitle.includes('Spotify Premium') && !spotify.MainWindowTitle.includes('Spotify Free')) {
+            const parts = spotify.MainWindowTitle.split(' - ');
+            artist = parts[0].trim();
+            title = parts.slice(1).join(' - ').trim();
+          }
+          // 2. Try Web Browsers (YouTube Web Player)
+          else {
+            const browser = procList.find(p =>
+              (p.Name.toLowerCase() === 'chrome' || p.Name.toLowerCase() === 'msedge' || p.Name.toLowerCase() === 'firefox' || p.Name.toLowerCase() === 'brave') &&
+              p.MainWindowTitle.includes(' - YouTube')
+            );
+            if (browser) {
+              // Cleans browser tab notification counts like "(1) Song Title - YouTube"
+              title = browser.MainWindowTitle.replace(/^\(\d+\)\s*/, '').split(' - YouTube')[0].trim();
+              artist = "";
+            }
+          }
+
+          if (!title) return reject(new Error('not playing'));
+
+          const id = 'win_' + Buffer.from(title + artist).toString('base64').substring(0, 15);
+          resolve({
+            currentTrack: { videoId: id, name: title, artist: artist, artwork: "" },
+            isPlaying: true,
+            position: 0,
+            duration: 0,
+          });
+        } catch (e) {
+          reject(e);
+        }
+      });
+    } else {
+      reject(new Error('Unsupported OS'));
+    }
   });
 }
 
-// --- Lyrics lookup (Python / syncedlyrics: Musixmatch, NetEase, Lrclib, ---
-// --- Deezer, Megalobiz, Genius, Lyricsify — tried in turn) ----------------
+// --- Lyrics lookup --------------------------------------------------------
 
 function parseLRC(lrc) {
   const lines = [];
@@ -113,7 +171,7 @@ function parseLRC(lrc) {
     });
   });
   lines.sort((a, b) => a.time - b.time);
-  return lines.filter((l) => l.text); // drop blank timing-only lines
+  return lines.filter((l) => l.text);
 }
 
 function fetchLyricsPython(track) {
@@ -147,7 +205,7 @@ function fetchLyricsPython(track) {
 // --- Lyrics via LRCLIB (pure Node, works inside a packaged app) ---------
 
 const LRCLIB_UA = 'lyrics-overlay (https://github.com/kunal-dangi/lyrics-overlayy)';
-const PYTHON_FALLBACK = !__dirname.includes('.asar'); // source installs only
+const PYTHON_FALLBACK = !__dirname.includes('.asar');
 
 function lyricQueries(track) {
   const title = (track.name || '').trim();
@@ -164,12 +222,11 @@ function lyricQueries(track) {
   });
 }
 
-const DURATION_TOLERANCE = 3; // seconds; a different edit of the song makes lyrics drift
+const DURATION_TOLERANCE = 3;
 
 const norm = (s) =>
   String(s || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
 
-// LRCLIB search is fuzzy, so reject results that are a different song
 function sameSong(r, track) {
   const rt = norm(r.trackName), ra = norm(r.artistName);
   const queries = lyricQueries(track);
@@ -210,16 +267,15 @@ async function fetchLyrics(track, duration) {
         const lrc = await lrclibSearch(params, duration, track);
         const parsed = lrc ? parseLRC(lrc) : [];
         if (parsed.length > 0) return parsed;
-        break; // got an answer, just no match: try the next query
+        break;
       } catch (e) {
         console.error('[lyrics] lrclib lookup failed:', e.message);
-        await new Promise((r) => setTimeout(r, 700)); // one quick retry for network hiccups
+        await new Promise((r) => setTimeout(r, 700));
       }
     }
   }
   if (!PYTHON_FALLBACK) return null;
   const py = await fetchLyricsPython(track);
-  // the Python providers don't verify the song: drop lyrics that run longer than the track
   if (py && duration && py[py.length - 1].time > duration + 3) return null;
   return py;
 }
@@ -262,7 +318,7 @@ async function translateLines(lines, track) {
     return apply(translations, romanized);
   } catch (e) {
     console.error('[translate] failed:', e.message);
-    return lines; // lyrics still show, just without translations
+    return lines;
   }
 }
 
@@ -295,9 +351,9 @@ async function setPaletteFromArtwork(url) {
         for (let i = 0; i < buf.length; i += 4) {
           const b = buf[i], g = buf[i + 1], r = buf[i + 2];
           const max = Math.max(r, g, b), min = Math.min(r, g, b);
-          if (max < 40) continue;          // skip near-black
+          if (max < 40) continue;
           const sat = (max - min) / max;
-          if (sat < 0.2) continue;         // skip greys and white
+          if (sat < 0.2) continue;
           const w = sat * (max / 255);
           bins[Math.floor(rgbToHue(r, g, b) / 30) % 12] += w;
           total += w;
@@ -311,7 +367,7 @@ async function setPaletteFromArtwork(url) {
 
   const lightText = TEXT_MODE === 'auto' ? nativeTheme.shouldUseDarkColors : TEXT_MODE === 'light';
   const h = hue === null ? 220 : hue;
-  const s = hue === null ? 10 : 65; // greyscale cover -> near-neutral colors
+  const s = hue === null ? 10 : 65;
   lastPalette = lightText
     ? { ink: `hsl(${h}, ${s}%, 92%)`, box: `hsl(${h}, ${s}%, 88%)`, boxInk: `hsl(${h}, ${s}%, 14%)`, glow: 'rgba(0,0,0,0.35)' }
     : { ink: `hsl(${h}, ${s}%, 14%)`, box: `hsl(${h}, ${s}%, 24%)`, boxInk: '#fff', glow: 'rgba(255,255,255,0.35)' };
@@ -325,7 +381,6 @@ async function pollLoop() {
   try {
     info = await getPlayerInfo();
   } catch (e) {
-    // Spotify not running, or nothing loaded yet
     if (win.isVisible()) win.hide();
     currentVideoId = null;
     return;
@@ -345,7 +400,7 @@ async function pollLoop() {
     setPaletteFromArtwork(track.artwork);
     const myGeneration = ++fetchGeneration;
 
-    win.hide(); // stay out of the way while we look the new track up
+    win.hide();
     win.webContents.send('track', {
       track,
       isPlaying: info.isPlaying,
@@ -355,20 +410,19 @@ async function pollLoop() {
 
     const lyrics = await fetchLyrics(track, info.duration);
 
-    if (myGeneration !== fetchGeneration) return; // a newer track started meanwhile
+    if (myGeneration !== fetchGeneration) return;
 
     if (!lyrics) {
       win.webContents.send('lyrics', null);
       if (!retriedTracks.has(track.videoId)) {
-        // a network hiccup looks the same as "no lyrics": look once more shortly after
         retriedTracks.add(track.videoId);
         setTimeout(() => { if (currentVideoId === track.videoId) currentVideoId = null; }, 6000);
       }
-      return; // no synced lyrics — leave the window hidden entirely
+      return;
     }
 
     win.webContents.send('lyrics', lyrics);
-    win.showInactive(); // show right away; translations follow in the background
+    win.showInactive();
     translateLines(lyrics, track).then((translated) => {
       if (myGeneration === fetchGeneration) win.webContents.send('lyrics', translated);
     });
@@ -387,11 +441,10 @@ async function pollLoop() {
 app.whenReady().then(() => {
   if (!gotLock) return;
   createWindow();
-  // Lyrics out of sync? Ctrl+Option+. shows them earlier, Ctrl+Option+, later, Ctrl+Option+/ resets
   globalShortcut.register('Control+Alt+.', () => nudgeSync(0.25));
   globalShortcut.register('Control+Alt+,', () => nudgeSync(-0.25));
   globalShortcut.register('Control+Alt+/', () => nudgeSync(0));
-  fetch(TRANSLATE_URL.replace('/translate', '/health')).catch(() => {}); // wake the free Render instance
+  fetch(TRANSLATE_URL.replace('/translate', '/health')).catch(() => { });
   pollLoop();
   pollTimer = setInterval(pollLoop, POLL_INTERVAL_MS);
 });

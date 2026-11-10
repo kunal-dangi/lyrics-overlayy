@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, nativeImage, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, nativeImage, nativeTheme, Tray, Menu } = require('electron');
 const { globalShortcut } = require('electron');
 const path = require('path');
 const { exec, execFile } = require('child_process');
@@ -19,6 +19,8 @@ let win;
 let pollTimer;
 let currentVideoId = null;
 const retriedTracks = new Set();
+// ponytail: unbounded, fine for one listening session; cap it (drop oldest) if memory ever matters
+const lyricsCache = new Map(); // track id -> lines (translated once available)
 
 const OFFSETS_PATH = path.join(app.getPath('userData'), 'sync-offsets.json');
 let syncOffsets = {};
@@ -133,8 +135,11 @@ function getPlayerInfo() {
             );
             if (browser) {
               // Cleans browser tab notification counts like "(1) Song Title - YouTube"
-              title = browser.MainWindowTitle.replace(/^\(\d+\)\s*/, '').split(' - YouTube')[0].trim();
-              artist = "";
+              const full = browser.MainWindowTitle.replace(/^\(\d+\)\s*/, '').split(' - YouTube')[0].trim();
+              // music videos are usually titled "Artist - Song (Official Video)"
+              const dash = full.indexOf(' - ');
+              if (dash > 0) { artist = full.slice(0, dash).trim(); title = full.slice(dash + 3).trim(); }
+              else title = full;
             }
           }
 
@@ -407,8 +412,10 @@ async function pollLoop() {
     win.webContents.send('offset', syncOffsets[currentVideoId] || 0);
     setPaletteFromArtwork(track.artwork);
     const myGeneration = ++fetchGeneration;
+    const cached = lyricsCache.get(track.videoId);
 
-    win.webContents.send('lyrics', null);
+    // on a cache hit the renderer keeps its current lines, so resuming a song keeps its look
+    if (!cached) win.webContents.send('lyrics', null);
     win.webContents.send('track', {
       track,
       isPlaying: info.isPlaying,
@@ -416,7 +423,7 @@ async function pollLoop() {
       duration: info.duration,
     });
 
-    const lyrics = await fetchLyrics(track, info.duration);
+    const lyrics = cached || await fetchLyrics(track, info.duration);
 
     if (myGeneration !== fetchGeneration) return;
 
@@ -429,11 +436,13 @@ async function pollLoop() {
       return;
     }
 
+    lyricsCache.set(track.videoId, lyrics);
     win.webContents.send('lyrics', lyrics);
     // ponytail: on Windows this is a normal window, so it starts above others until you click something.
     // True desktop level there needs parenting to the WorkerW desktop window (native code, untested).
     if (!win.isVisible()) win.showInactive();
     translateLines(lyrics, track).then((translated) => {
+      if (translated !== lyrics) lyricsCache.set(track.videoId, translated);
       if (myGeneration === fetchGeneration) win.webContents.send('lyrics', translated);
     });
   } else {
@@ -446,15 +455,42 @@ async function pollLoop() {
   }
 }
 
+// --- Tray: the only way to quit, since the window is click-through and off the taskbar ---
+
+let tray; // kept global so it isn't garbage collected
+
+function createTray() {
+  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'icon.png')).resize({ width: 16, height: 16 }));
+  tray.setToolTip('Lyrics Overlay');
+  const items = [];
+  if (app.isPackaged) {
+    items.push({
+      label: 'Start at login',
+      type: 'checkbox',
+      checked: app.getLoginItemSettings().openAtLogin,
+      click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
+    });
+  }
+  items.push({ label: 'Quit Lyrics Overlay', click: () => app.quit() });
+  tray.setContextMenu(Menu.buildFromTemplate(items));
+  if (process.platform === 'darwin') app.dock.hide(); // the tray replaces the dock icon
+}
+
 // --- App lifecycle ----------------------------------------------------------
 
 app.whenReady().then(() => {
   if (!gotLock) return;
   // installed app (.exe / .dmg): start at login; source installs use the macOS LaunchAgent instead
-  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true });
+  // only on first run, so turning it off from the tray sticks
+  const loginMarker = path.join(app.getPath('userData'), 'login-item-set');
+  if (app.isPackaged && !fs.existsSync(loginMarker)) {
+    app.setLoginItemSettings({ openAtLogin: true });
+    try { fs.writeFileSync(loginMarker, ''); } catch (e) { }
+  }
   createWindow();
-  globalShortcut.register('Control+Alt+.', () => nudgeSync(0.25));
-  globalShortcut.register('Control+Alt+,', () => nudgeSync(-0.25));
+  createTray();
+  globalShortcut.register('Control+Alt+.', () => nudgeSync(0.5));
+  globalShortcut.register('Control+Alt+,', () => nudgeSync(-0.5));
   globalShortcut.register('Control+Alt+/', () => nudgeSync(0));
   fetch(TRANSLATE_URL.replace('/translate', '/health')).catch(() => { });
   pollLoop();

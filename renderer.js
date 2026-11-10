@@ -35,24 +35,37 @@ window.kaset.onPalette((p) => {
   root.setProperty('--box', p.box);
   root.setProperty('--box-ink', p.boxInk);
   root.setProperty('--glow', p.glow);
-  // a lighter or darker shade of the same hue (not transparency) for the alternate lines
+  // alternate lines: a richer shade of the same hue. Only a small lightness step, with saturation
+  // pushed up, so the shade reads as a vivid tone of the color instead of a washed-out one
   const shade = (c, amount) => {
     const m = /hsl\(\s*(\d+),\s*(\d+)%,\s*(\d+)%\s*\)/.exec(c);
     if (!m) return c;
-    const l = +m[3];
-    const nl = l < 50 ? Math.min(l + amount, 85) : Math.max(l - amount, 20);
-    return `hsl(${m[1]}, ${m[2]}%, ${nl}%)`;
+    const s = +m[2], l = +m[3];
+    const ns = s < 20 ? s : Math.max(s, 90); // greyscale covers stay grey
+    const nl = l < 50 ? l + amount : l - amount;
+    return `hsl(${m[1]}, ${ns}%, ${nl}%)`;
   };
-  root.setProperty('--ink-alt', shade(p.ink, 24));
-  root.setProperty('--box-alt', shade(p.box, 18));
+  root.setProperty('--ink-alt', shade(p.ink, 10));
+  root.setProperty('--box-alt', shade(p.box, 10));
 });
 
 // Sync tuning: BASE_OFFSET covers polling + animation delay; syncOffset is the per-song nudge from main.js
 const BASE_OFFSET = 0.25;
 let syncOffset = 0;
+// no forced redraw: the next frame picks up the new timing, so a line only changes when the shift
+// actually crosses into the next or previous line; a small badge confirms each press
+const badge = document.createElement('div');
+badge.id = 'offset-badge';
+document.body.appendChild(badge);
+let badgeTimer;
 window.kaset.onOffset((v) => {
-  syncOffset = Number(v) || 0;
-  shownIndex = -1; // redraw with the new timing
+  const next = Number(v) || 0;
+  if (next === syncOffset) return;
+  syncOffset = next;
+  badge.textContent = next === 0 ? 'sync reset' : (next > 0 ? '+' : '') + next.toFixed(2) + 's';
+  badge.classList.add('show');
+  clearTimeout(badgeTimer);
+  badgeTimer = setTimeout(() => badge.classList.remove('show'), 1200);
 });
 
 // --- Random look per song: pickStyle() runs when a new song's lyrics arrive ------

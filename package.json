@@ -40,6 +40,7 @@
       "renderer.js",
       "index.html",
       "style.css",
+      "icon.png",
       "package.json"
     ]
   }

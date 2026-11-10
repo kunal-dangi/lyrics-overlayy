@@ -5,5 +5,4 @@ contextBridge.exposeInMainWorld('kaset', {
   onLyrics: (cb) => ipcRenderer.on('lyrics', (_event, data) => cb(data)),
   onPalette: (cb) => ipcRenderer.on('palette', (_event, data) => cb(data)),
   onOffset: (cb) => ipcRenderer.on('offset', (_event, v) => cb(v)),
-  close: () => ipcRenderer.send('close-app'),
 });

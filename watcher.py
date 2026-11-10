@@ -101,8 +101,8 @@ def main():
                 pass
             elif overlay_process is not None:
                 # We started it earlier and it's since exited on its own
-                # while Spotify is still open — most likely you closed it
-                # manually via the close button. Respect that for the rest
+                # while Spotify is still open — most likely you quit it
+                # from the tray menu. Respect that for the rest
                 # of this Spotify session instead of popping it back up.
                 log("overlay closed while Spotify still running — not relaunching until Spotify restarts")
                 suppress_relaunch = True

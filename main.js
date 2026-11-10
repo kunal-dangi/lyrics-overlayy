@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, nativeImage, nativeTheme, Tray, Menu } = require('electron');
+const { app, BrowserWindow, screen, nativeImage, nativeTheme, Tray, Menu } = require('electron');
 const { globalShortcut } = require('electron');
 const path = require('path');
 const { exec, execFile } = require('child_process');
@@ -489,6 +489,9 @@ app.whenReady().then(() => {
   }
   createWindow();
   createTray();
+  // follow resolution changes and monitors being plugged in or out
+  const fitToDisplay = () => win.setBounds(screen.getPrimaryDisplay().bounds);
+  ['display-metrics-changed', 'display-added', 'display-removed'].forEach((e) => screen.on(e, fitToDisplay));
   globalShortcut.register('Control+Alt+.', () => nudgeSync(0.5));
   globalShortcut.register('Control+Alt+,', () => nudgeSync(-0.5));
   globalShortcut.register('Control+Alt+/', () => nudgeSync(0));
@@ -503,5 +506,3 @@ app.on('window-all-closed', () => {
   clearInterval(pollTimer);
   app.quit();
 });
-
-ipcMain.on('close-app', () => app.quit());

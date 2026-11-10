@@ -35,11 +35,20 @@ Adjust lyrics timing on the fly if a song's timestamp is slightly ahead or behin
 
 | Shortcut | Action |
 |---|---|
-| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>.</kbd> *(macOS: <kbd>Ctrl</kbd>+<kbd>⌥ Opt</kbd>+<kbd>.</kbd>)* | Nudge lyrics **earlier** (+0.25s) |
-| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>,</kbd> *(macOS: <kbd>Ctrl</kbd>+<kbd>⌥ Opt</kbd>+<kbd>,</kbd>)* | Nudge lyrics **later** (-0.25s) |
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>.</kbd> *(macOS: <kbd>Ctrl</kbd>+<kbd>⌥ Opt</kbd>+<kbd>.</kbd>)* | Nudge lyrics **earlier** (+0.5s) |
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>,</kbd> *(macOS: <kbd>Ctrl</kbd>+<kbd>⌥ Opt</kbd>+<kbd>,</kbd>)* | Nudge lyrics **later** (-0.5s) |
 | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>/</kbd> *(macOS: <kbd>Ctrl</kbd>+<kbd>⌥ Opt</kbd>+<kbd>/</kbd>)* | Reset sync offset to 0 |
 
-Offsets are automatically remembered in `sync-offsets.json` so you never have to adjust the same song twice.
+Offsets are automatically remembered in `sync-offsets.json` so you never have to adjust the same song twice. A small badge in the bottom-left confirms each press.
+
+---
+
+## 🎛️ Tray Menu
+
+The overlay is click-through and stays off the taskbar and dock, so it's controlled from its tray icon (menu bar on macOS, system tray on Windows):
+
+- **Quit Lyrics Overlay**: closes the overlay. With the macOS LaunchAgent, it stays closed until Spotify is restarted.
+- **Start at login** *(installed app only)*: on by default after the first launch; untick it to stop auto-starting.
 
 ---
 
@@ -154,7 +163,7 @@ Build standalone installers using `electron-builder`:
 
 - **Windows NSIS Installer**:
   ```bash
-  npx electron-builder --win nsis
+  npm run dist:win
   ```
   Generates a Windows `.exe` installer in `dist/`.
 

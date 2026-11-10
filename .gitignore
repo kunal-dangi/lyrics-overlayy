@@ -6,3 +6,4 @@ translation-cache.json
 .wrangler/
 .dev.vars
 dist/
+dist*/

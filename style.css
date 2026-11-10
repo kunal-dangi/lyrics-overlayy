@@ -164,14 +164,6 @@ html, body {
 #stage[data-style="pop"] .line.in .w { transition: none; animation: pop 0.55s cubic-bezier(0.2, 1.5, 0.3, 1) var(--d, 0ms) backwards; }
 #stage[data-style="pop"] .line.out .w { animation: none; opacity: 0; transform: translateY(-0.25em); }
 
-/* card */
-#stage[data-style="card"] .stack {
-  background: color-mix(in srgb, var(--box) 90%, transparent);
-  padding: calc(var(--u) * var(--fit, 1) * 0.5) calc(var(--u) * var(--fit, 1) * 0.75);
-  border-radius: calc(var(--u) * var(--fit, 1) * 0.4);
-}
-#stage[data-style="card"] .row, #stage[data-style="card"] .tr { color: var(--box-ink); text-shadow: none; }
-#stage[data-style="card"] .t3 .w { background: var(--box-ink); color: var(--box); }
 
 /* ===== Entrances, shapes and shades (the block always stays in the same spot) ===== */
 :root {

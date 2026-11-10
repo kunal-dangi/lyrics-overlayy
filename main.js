@@ -41,9 +41,7 @@ function createWindow() {
     y,
     width,
     height,
-    icon: path.join(__dirname, 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     type: process.platform === 'darwin' ? 'desktop' : 'toolbar',
-    alwaysOnTop: process.platform === 'win32',
     frame: false,
     transparent: true,
     hasShadow: false,
@@ -82,6 +80,11 @@ else
   return "closed"
 end if
 `;
+
+// ponytail: Windows window titles carry no playback position, so we time the song from when we first
+// see it (pauses subtracted). Wrong if the overlay starts mid-song; the real fix is the Windows media
+// session API (GlobalSystemMediaTransportControls), which does report position.
+let winClock = { id: null, start: 0, pausedAt: 0 };
 
 function getPlayerInfo() {
   return new Promise((resolve, reject) => {
@@ -135,13 +138,18 @@ function getPlayerInfo() {
             }
           }
 
-          if (!title) return reject(new Error('not playing'));
+          if (!title) {
+            if (winClock.id && !winClock.pausedAt) winClock.pausedAt = Date.now(); // paused or stopped
+            return reject(new Error('not playing'));
+          }
 
           const id = 'win_' + Buffer.from(title + artist).toString('base64').substring(0, 15);
+          if (id !== winClock.id) winClock = { id, start: Date.now(), pausedAt: 0 };
+          else if (winClock.pausedAt) { winClock.start += Date.now() - winClock.pausedAt; winClock.pausedAt = 0; }
           resolve({
             currentTrack: { videoId: id, name: title, artist: artist, artwork: "" },
             isPlaying: true,
-            position: 0,
+            position: (Date.now() - winClock.start) / 1000,
             duration: 0,
           });
         } catch (e) {
@@ -400,7 +408,7 @@ async function pollLoop() {
     setPaletteFromArtwork(track.artwork);
     const myGeneration = ++fetchGeneration;
 
-    win.hide();
+    win.webContents.send('lyrics', null);
     win.webContents.send('track', {
       track,
       isPlaying: info.isPlaying,
@@ -422,7 +430,9 @@ async function pollLoop() {
     }
 
     win.webContents.send('lyrics', lyrics);
-    win.showInactive();
+    // ponytail: on Windows this is a normal window, so it starts above others until you click something.
+    // True desktop level there needs parenting to the WorkerW desktop window (native code, untested).
+    if (!win.isVisible()) win.showInactive();
     translateLines(lyrics, track).then((translated) => {
       if (myGeneration === fetchGeneration) win.webContents.send('lyrics', translated);
     });

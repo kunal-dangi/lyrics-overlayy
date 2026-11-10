@@ -143,7 +143,7 @@ function getPlayerInfo() {
             return reject(new Error('not playing'));
           }
 
-          const id = 'win_' + Buffer.from(title + artist).toString('base64').substring(0, 15);
+          const id = 'win_' + title + '|' + artist;
           if (id !== winClock.id) winClock = { id, start: Date.now(), pausedAt: 0 };
           else if (winClock.pausedAt) { winClock.start += Date.now() - winClock.pausedAt; winClock.pausedAt = 0; }
           resolve({
@@ -450,6 +450,8 @@ async function pollLoop() {
 
 app.whenReady().then(() => {
   if (!gotLock) return;
+  // installed app (.exe / .dmg): start at login; source installs use the macOS LaunchAgent instead
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true });
   createWindow();
   globalShortcut.register('Control+Alt+.', () => nudgeSync(0.25));
   globalShortcut.register('Control+Alt+,', () => nudgeSync(-0.25));

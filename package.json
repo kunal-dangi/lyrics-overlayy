@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --mac dmg",
-    "dist:win": "electron-builder --win nsis"
+    "dist:win": "electron-builder --win nsis --x64"
   },
   "devDependencies": {
     "electron": "^28.3.3",
@@ -41,7 +41,7 @@
       "renderer.js",
       "index.html",
       "style.css",
-      "icon.png",
+      "build/icon.png",
       "package.json"
     ]
   }

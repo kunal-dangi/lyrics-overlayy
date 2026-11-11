@@ -460,7 +460,7 @@ async function pollLoop() {
 let tray; // kept global so it isn't garbage collected
 
 function createTray() {
-  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'icon.png')).resize({ width: 16, height: 16 }));
+  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png')).resize({ width: 16, height: 16 }));
   tray.setToolTip('Lyrics Overlay');
   const items = [];
   if (app.isPackaged) {

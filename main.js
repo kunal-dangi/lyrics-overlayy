@@ -39,8 +39,17 @@ function nudgeSync(delta) {
 }
 let fetchGeneration = 0;
 
+// Windows treats a borderless window exactly the size of the monitor as a full-screen app and
+// stops drawing what's behind it (gray/black instead of the wallpaper). Stopping at the taskbar,
+// and 1px short in case the taskbar auto-hides, keeps it an ordinary see-through window.
+function overlayBounds() {
+  const d = screen.getPrimaryDisplay();
+  if (process.platform !== 'win32') return d.bounds;
+  return { ...d.workArea, height: d.workArea.height - 1 };
+}
+
 function createWindow() {
-  const { x, y, width, height } = screen.getPrimaryDisplay().bounds;
+  const { x, y, width, height } = overlayBounds();
 
   win = new BrowserWindow({
     x,
@@ -495,7 +504,7 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   // follow resolution changes and monitors being plugged in or out
-  const fitToDisplay = () => win.setBounds(screen.getPrimaryDisplay().bounds);
+  const fitToDisplay = () => win.setBounds(overlayBounds());
   ['display-metrics-changed', 'display-added', 'display-removed'].forEach((e) => screen.on(e, fitToDisplay));
   globalShortcut.register('Control+Alt+.', () => nudgeSync(0.5));
   globalShortcut.register('Control+Alt+,', () => nudgeSync(-0.5));

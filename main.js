@@ -11,6 +11,10 @@ const POLL_INTERVAL_MS = 1000;
 const TEXT_MODE = 'dark'; // 'auto' (follow macOS appearance) | 'light' text | 'dark' text
 const LYRICS_SCRIPT = path.join(__dirname, 'fetch_lyrics.py');
 
+// Windows: with GPU compositing, a transparent full-screen window renders black on many
+// drivers, hiding the wallpaper. Software rendering keeps it see-through (costs a little CPU).
+if (process.platform === 'win32') app.disableHardwareAcceleration();
+
 // Only one overlay at a time: a second copy would draw the same lyrics on top of the first
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -46,6 +50,7 @@ function createWindow() {
     type: process.platform === 'darwin' ? 'desktop' : 'toolbar',
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000', // fully transparent, so nothing paints black before the page loads
     hasShadow: false,
     resizable: false,
     movable: false,

@@ -47,7 +47,7 @@ Offsets are automatically remembered in `sync-offsets.json` so you never have to
 
 The overlay is click-through and stays off the taskbar and dock, so it's controlled from its tray icon (menu bar on macOS, system tray on Windows):
 
-- **Quit Lyrics Overlay**: closes the overlay. With the macOS LaunchAgent, it stays closed until Spotify is restarted.
+- **Quit Lyrics Overlay**: closes the overlay. With the macOS LaunchAgent, it stays closed until your next login.
 - **Start at login** *(installed app only)*: on by default after the first launch; untick it to stop auto-starting.
 
 ---
@@ -73,7 +73,7 @@ The overlay is click-through and stays off the taskbar and dock, so it's control
 ## 📦 Requirements
 
 - **macOS** (10.15+) or **Windows** (10/11)
-- **Spotify** desktop app (or supported Chromium/Gecko browsers playing YouTube on Windows)
+- Something playing music: Spotify, Apple Music, or a browser tab (YouTube, YouTube Music, SoundCloud, …)
 - **Node.js** 18 or newer + `npm`
 - *(Optional for developer fallback)*: **Python 3** with `syncedlyrics`
 
@@ -130,14 +130,14 @@ Start playing a song with synced lyrics on Spotify. The overlay will appear auto
 
 ## 🍏 macOS Automation (LaunchAgent)
 
-Instead of launching the overlay manually from a terminal, you can set up a background watcher that automatically launches the overlay when Spotify opens and quits it when Spotify closes:
+Instead of launching the overlay manually from a terminal, you can set up a background watcher that starts the overlay at login and keeps it running (it hides itself when no song is playing):
 
 ```bash
 python3 install_launch_agent.py
 ```
 
-- **Open Spotify** → overlay opens within seconds.
-- **Quit Spotify** → overlay gracefully quits.
+- **Play a song** (Spotify, a browser tab, any player) → lyrics appear.
+- **Nothing playing** → the overlay stays hidden.
 - **Reboot / Login** → watcher resumes automatically.
 
 To uninstall the watcher:
@@ -201,7 +201,7 @@ lyrics-overlayy/
 ├── style.css               # Styling themes, font stacks, layout classes, animations
 ├── index.html              # Overlay DOM structure
 ├── fetch_lyrics.py         # Python multi-provider fallback script
-├── watcher.py              # macOS Spotify lifecycle monitor
+├── watcher.py              # macOS login watcher: keeps the overlay running
 ├── install_launch_agent.py # LaunchAgent installer
 ├── uninstall_launch_agent.py
 ├── package.json

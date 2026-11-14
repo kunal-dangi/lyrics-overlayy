@@ -2,8 +2,8 @@
 """
 One-time setup: registers watcher.py as a macOS LaunchAgent so
 it runs automatically in the background from login onward. After this,
-you never need to run a terminal command again — the overlay starts when
-Spotify starts, and quits when Spotify quits.
+you never need to run a terminal command again — the overlay starts at
+login and shows lyrics whenever a song plays.
 
 Run once:
     python3 install_launch_agent.py
@@ -77,8 +77,8 @@ def main():
 
     print()
     print("Installed and running in the background.")
-    print("Open Spotify -> the lyrics overlay appears automatically.")
-    print("Quit Spotify -> it quits automatically too.")
+    print("The overlay now runs from login and shows lyrics whenever a song plays.")
+    print("Quit it from the tray icon; it comes back at the next login.")
     print(f"Logs, if you ever need them: {LOG_DIR}")
 
 

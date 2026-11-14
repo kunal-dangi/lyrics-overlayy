@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Watches for the Spotify process. Starts the lyrics overlay whenever Spotify is
-running, stops it whenever Spotify quits. Runs forever in a loop — meant to
-be registered as a background LaunchAgent by install_launch_agent.py, not
-run by hand.
+Starts the lyrics overlay at login and keeps it running. The overlay hides itself
+whenever no song is playing (in Spotify, a browser or any other player), so it
+doesn't need Spotify to be open. Meant to be registered as a background
+LaunchAgent by install_launch_agent.py, not run by hand.
 """
 
 import os
@@ -17,26 +17,12 @@ ELECTRON_BIN = os.path.join(
     "Contents", "MacOS", "Electron",
 )
 LOG_DIR = os.path.expanduser("~/Library/Logs/lyric-overlay")
-PLAYER_PROCESS_NAME = "Spotify"
-POLL_SECONDS = 3
 
 overlay_process = None
-suppress_relaunch = False  # true after the user manually closes the overlay
 
 
 def log(msg):
     print(f"[watcher] {msg}", flush=True)
-
-
-def is_kaset_running() -> bool:
-    if subprocess.run(["pgrep", "-x", PLAYER_PROCESS_NAME], capture_output=True).returncode == 0:
-        return True
-    # Fallback in case the executable inside Spotify.app isn't named exactly "Spotify"
-    return subprocess.run(["pgrep", "-f", "Spotify.app"], capture_output=True).returncode == 0
-
-
-def is_overlay_alive() -> bool:
-    return overlay_process is not None and overlay_process.poll() is None
 
 
 def start_overlay():
@@ -80,38 +66,13 @@ def stop_overlay():
 
 
 def main():
-    global suppress_relaunch
-    global overlay_process
-    log(f"watching for {PLAYER_PROCESS_NAME}...")
-    was_kaset_running = False
-
+    start_overlay()
+    if overlay_process is not None:
+        overlay_process.wait()
+        log("overlay closed (tray Quit) — it stays closed until the next login")
+    # launchd's KeepAlive would restart us (and the overlay) if we exited, so idle instead
     while True:
-        kaset_running = is_kaset_running()
-
-        if kaset_running and not was_kaset_running:
-            # Fresh Spotify session — clear any "user closed it" suppression
-            # from a previous session so it starts fresh again this time.
-            suppress_relaunch = False
-
-        if not kaset_running:
-            if is_overlay_alive():
-                stop_overlay()
-        else:
-            if is_overlay_alive():
-                pass
-            elif overlay_process is not None:
-                # We started it earlier and it's since exited on its own
-                # while Spotify is still open — most likely you quit it
-                # from the tray menu. Respect that for the rest
-                # of this Spotify session instead of popping it back up.
-                log("overlay closed while Spotify still running — not relaunching until Spotify restarts")
-                suppress_relaunch = True
-                overlay_process = None
-            elif not suppress_relaunch:
-                start_overlay()
-
-        was_kaset_running = kaset_running
-        time.sleep(POLL_SECONDS)
+        time.sleep(3600)
 
 
 if __name__ == "__main__":

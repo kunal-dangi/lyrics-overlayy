@@ -2,15 +2,15 @@
 
 A sleek, transparent, always-on desktop lyrics overlay for **macOS** and **Windows**.
 
-It watches Spotify (or supported browsers on Windows), fetches synchronized line-by-line and word-by-word lyrics, and presents them in real-time with kinetic typography and dynamic color palettes extracted directly from album artwork. The overlay is click-through, non-focusable, and sits unobtrusively on your desktop so it never steals focus or blocks your workflow.
+It watches whatever is playing — Spotify, Apple Music, or a song in any browser tab (YouTube, YouTube Music, SoundCloud, …) — skips films, shows and other videos, fetches synchronized line-by-line and word-by-word lyrics, and presents them in real-time with kinetic typography and dynamic color palettes extracted directly from album artwork. The overlay is click-through, non-focusable, and sits unobtrusively on your desktop so it never steals focus or blocks your workflow.
 
 ---
 
 ## ✨ Features
 
 - **Cross-Platform Support**:
-  - **macOS**: Native AppleScript (`osascript`) integration with Spotify. Runs at the desktop/wallpaper level behind all windows and icons.
-  - **Windows**: Zero-dependency PowerShell media detection for Spotify Desktop as well as YouTube media in major browsers (Chrome, Edge, Firefox, Brave).
+  - **macOS**: reads the system Now Playing info, so any app or browser works; Spotify uses its own AppleScript for exact timing. Runs at the desktop/wallpaper level behind all windows and icons.
+  - **Windows**: reads the system media sessions (the ones the volume flyout shows) through PowerShell, so Spotify, browsers and other players all work, with real playback position.
 - **Kinetic Typography & Dynamic Styling**:
   - Multiple styling presets (Editorial, Poster, Handwritten, Pop, Card, etc.).
   - Varied kinetic entrance animations (rise, climb, drop, slide, focus blur, letter tracking, 3D flip, wipe).
@@ -55,8 +55,9 @@ The overlay is click-through and stays off the taskbar and dock, so it's control
 ## 🛠️ How It Works
 
 1. **Media Polling**:
-   - On **macOS**, an AppleScript query polls Spotify every second for the track name, artist, album art URL, playback state, position, and duration.
-   - On **Windows**, a lightweight PowerShell command inspects running processes for Spotify Desktop or browser windows playing YouTube.
+   - On **macOS**, the system Now Playing info is read every second (title, artist, artwork, position, duration); Spotify is asked directly through AppleScript.
+   - On **Windows**, one long-running PowerShell process reads the system media sessions.
+   - Films, shows and videos are skipped: anything over 15 minutes, without an artist, or titled like a trailer/episode/vlog, and in the end anything LRCLIB has no matching synced lyrics for.
 2. **Lyrics Lookup**:
    - Queries LRCLIB's API using intelligent query variations (clean title, first artist, combined search).
    - Verifies track duration and title similarity before accepting synchronized LRC data.

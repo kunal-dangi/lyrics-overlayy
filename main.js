@@ -1,7 +1,8 @@
 const { app, BrowserWindow, screen, nativeImage, nativeTheme, Tray, Menu } = require('electron');
 const { globalShortcut } = require('electron');
 const path = require('path');
-const { exec, execFile } = require('child_process');
+const { execFile } = require('child_process');
+const { getNowPlaying, looksLikeSong, trackCandidates, stopWatching } = require('./media');
 const fs = require('fs');
 const process = require('process');
 
@@ -11,9 +12,9 @@ const POLL_INTERVAL_MS = 1000;
 const TEXT_MODE = 'dark'; // 'auto' (follow macOS appearance) | 'light' text | 'dark' text
 const LYRICS_SCRIPT = path.join(__dirname, 'fetch_lyrics.py');
 
-// Windows: with GPU compositing, a transparent full-screen window renders black on many
-// drivers, hiding the wallpaper. Software rendering keeps it see-through (costs a little CPU).
-if (process.platform === 'win32') app.disableHardwareAcceleration();
+// Windows: keep GPU rendering on. Chromium only draws a see-through window there through
+// DirectComposition (GPU); software rendering paints the window gray. The black we saw with the
+// GPU came from the window covering the whole monitor, which overlayBounds() now avoids.
 
 // Only one overlay at a time: a second copy would draw the same lyrics on top of the first
 const gotLock = app.requestSingleInstanceLock();
@@ -77,107 +78,6 @@ function createWindow() {
   win.loadFile('index.html');
   win.webContents.on('did-finish-load', () => {
     if (lastPalette) win.webContents.send('palette', lastPalette);
-  });
-}
-
-// --- Cross-Platform Media Bridge -------------------------------------------
-
-const SPOTIFY_SCRIPT = `
-if application "Spotify" is running then
-  tell application "Spotify"
-    if player state is stopped then return "stopped"
-    set art to ""
-    try
-      set art to artwork url of current track
-    end try
-    return (id of current track) & "||" & (name of current track) & "||" & (artist of current track) & "||" & (player position as string) & "||" & (duration of current track as string) & "||" & (player state as string) & "||" & art
-  end tell
-else
-  return "closed"
-end if
-`;
-
-// ponytail: Windows window titles carry no playback position, so we time the song from when we first
-// see it (pauses subtracted). Wrong if the overlay starts mid-song; the real fix is the Windows media
-// session API (GlobalSystemMediaTransportControls), which does report position.
-let winClock = { id: null, start: 0, pausedAt: 0 };
-
-function getPlayerInfo() {
-  return new Promise((resolve, reject) => {
-
-    // 🍎 macOS: AppleScript Integration
-    if (process.platform === 'darwin') {
-      execFile('osascript', ['-e', SPOTIFY_SCRIPT], { timeout: 3000 }, (err, stdout) => {
-        if (err) return reject(err);
-        const out = stdout.trim();
-        if (!out || out === 'closed' || out === 'stopped') return reject(new Error('not playing'));
-        const [id, name, artist, pos, dur, state, art] = out.split('||');
-        resolve({
-          currentTrack: { videoId: id, name, artist, artwork: art },
-          isPlaying: state === 'playing',
-          position: parseFloat(pos.replace(',', '.')),
-          duration: parseFloat(dur.replace(',', '.')) / 1000,
-        });
-      });
-    }
-
-    // 🪟 Windows: Zero-Dependency PowerShell Polling
-    else if (process.platform === 'win32') {
-      const psCommand = `Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object Name, MainWindowTitle | ConvertTo-Json -Compress`;
-
-      exec(`powershell -NoProfile -Command "${psCommand}"`, { timeout: 3000 }, (error, stdout) => {
-        if (error || !stdout) return reject(new Error('not playing'));
-
-        try {
-          const procs = JSON.parse(stdout.trim());
-          const procList = Array.isArray(procs) ? procs : [procs];
-          let title = '';
-          let artist = '';
-
-          // 1. Try Spotify App
-          const spotify = procList.find(p => p.Name.toLowerCase() === 'spotify' && p.MainWindowTitle.includes(' - '));
-          if (spotify && !spotify.MainWindowTitle.includes('Spotify Premium') && !spotify.MainWindowTitle.includes('Spotify Free')) {
-            const parts = spotify.MainWindowTitle.split(' - ');
-            artist = parts[0].trim();
-            title = parts.slice(1).join(' - ').trim();
-          }
-          // 2. Try Web Browsers (YouTube Web Player)
-          else {
-            const browser = procList.find(p =>
-              (p.Name.toLowerCase() === 'chrome' || p.Name.toLowerCase() === 'msedge' || p.Name.toLowerCase() === 'firefox' || p.Name.toLowerCase() === 'brave') &&
-              p.MainWindowTitle.includes(' - YouTube')
-            );
-            if (browser) {
-              // Cleans browser tab notification counts like "(1) Song Title - YouTube"
-              const full = browser.MainWindowTitle.replace(/^\(\d+\)\s*/, '').split(' - YouTube')[0].trim();
-              // music videos are usually titled "Artist - Song (Official Video)"
-              const dash = full.indexOf(' - ');
-              if (dash > 0) { artist = full.slice(0, dash).trim(); title = full.slice(dash + 3).trim(); }
-              else title = full;
-            }
-          }
-
-          if (!title) {
-            if (winClock.id && !winClock.pausedAt) winClock.pausedAt = Date.now(); // paused or stopped
-            return reject(new Error('not playing'));
-          }
-
-          const id = 'win_' + title + '|' + artist;
-          if (id !== winClock.id) winClock = { id, start: Date.now(), pausedAt: 0 };
-          else if (winClock.pausedAt) { winClock.start += Date.now() - winClock.pausedAt; winClock.pausedAt = 0; }
-          resolve({
-            currentTrack: { videoId: id, name: title, artist: artist, artwork: "" },
-            isPlaying: true,
-            position: (Date.now() - winClock.start) / 1000,
-            duration: 0,
-          });
-        } catch (e) {
-          reject(e);
-        }
-      });
-    } else {
-      reject(new Error('Unsupported OS'));
-    }
   });
 }
 
@@ -366,11 +266,15 @@ function rgbToHue(r, g, b) {
 
 async function setPaletteFromArtwork(url) {
   let hue = null;
-  if (url && url.startsWith('https://')) {
+  if (url && (url.startsWith('https://') || url.startsWith('data:'))) {
     try {
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const img = nativeImage.createFromBuffer(Buffer.from(await resp.arrayBuffer()));
+      let img;
+      if (url.startsWith('data:')) img = nativeImage.createFromDataURL(url);
+      else {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        img = nativeImage.createFromBuffer(Buffer.from(await resp.arrayBuffer()));
+      }
       if (!img.isEmpty()) {
         const buf = img.resize({ width: 32, height: 32 }).toBitmap(); // BGRA
         const bins = new Array(12).fill(0);
@@ -403,23 +307,33 @@ async function setPaletteFromArtwork(url) {
 
 // --- Poll loop -------------------------------------------------------------
 
+// first candidate with lyrics wins (browser tabs give a few guesses at artist and song)
+async function findLyrics(candidates, duration) {
+  for (const c of candidates) {
+    const lyrics = await fetchLyrics(c, duration);
+    if (lyrics) return lyrics;
+  }
+  return null;
+}
+
 async function pollLoop() {
-  let info;
+  let m;
   try {
-    info = await getPlayerInfo();
+    m = await getNowPlaying();
   } catch (e) {
+    m = null;
+  }
+
+  // nothing playing, or a film / show / video rather than a song
+  const candidates = looksLikeSong(m) ? trackCandidates(m) : [];
+  if (candidates.length === 0) {
     if (win.isVisible()) win.hide();
     currentVideoId = null;
     return;
   }
 
-  const track = info.currentTrack;
-
-  if (!track) {
-    if (win.isVisible()) win.hide();
-    currentVideoId = null;
-    return;
-  }
+  const track = { ...candidates[0], videoId: m.id, artwork: m.artwork };
+  const info = { isPlaying: m.isPlaying, position: m.position, duration: m.duration };
 
   if (track.videoId !== currentVideoId) {
     currentVideoId = track.videoId;
@@ -437,7 +351,7 @@ async function pollLoop() {
       duration: info.duration,
     });
 
-    const lyrics = cached || await fetchLyrics(track, info.duration);
+    const lyrics = cached || await findLyrics(candidates, info.duration);
 
     if (myGeneration !== fetchGeneration) return;
 
@@ -514,7 +428,7 @@ app.whenReady().then(() => {
   pollTimer = setInterval(pollLoop, POLL_INTERVAL_MS);
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => { globalShortcut.unregisterAll(); stopWatching(); });
 
 app.on('window-all-closed', () => {
   clearInterval(pollTimer);

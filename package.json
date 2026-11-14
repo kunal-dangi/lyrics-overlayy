@@ -5,6 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node media.test.js",
     "dist": "electron-builder --mac dmg",
     "dist:win": "electron-builder --win nsis --x64"
   },
@@ -37,6 +38,7 @@
     },
     "files": [
       "main.js",
+      "media.js",
       "preload.js",
       "renderer.js",
       "index.html",

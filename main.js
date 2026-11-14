@@ -2,7 +2,7 @@ const { app, BrowserWindow, screen, nativeImage, nativeTheme, Tray, Menu } = req
 const { globalShortcut } = require('electron');
 const path = require('path');
 const { execFile } = require('child_process');
-const { getNowPlaying, looksLikeSong, trackCandidates, stopWatching } = require('./media');
+const { getNowPlaying, looksLikeSong, trackCandidates, isMusicApp, stopWatching } = require('./media');
 const fs = require('fs');
 const process = require('process');
 
@@ -180,12 +180,17 @@ async function lrclibSearch(params, duration, track) {
     (r) => r && typeof r.syncedLyrics === 'string' && r.syncedLyrics.trim() && sameSong(r, track)
   );
   if (synced.length === 0) return null;
-  if (!duration) return synced[0].syncedLyrics;
+  if (!duration) {
+    // no length to check against (Firefox doesn't report it): the title has to match exactly
+    const titles = lyricQueries(track).map(([t]) => norm(t));
+    const exact = synced.find((r) => titles.includes(norm(r.trackName)));
+    return exact ? exact.syncedLyrics : null;
+  }
   synced.sort((a, b) => Math.abs(a.duration - duration) - Math.abs(b.duration - duration));
   return Math.abs(synced[0].duration - duration) <= DURATION_TOLERANCE ? synced[0].syncedLyrics : null;
 }
 
-async function fetchLyrics(track, duration) {
+async function fetchLyrics(track, duration, allowFallback) {
   const queries = lyricQueries(track).map(([t, a]) => ({ track_name: t, artist_name: a }));
   if (queries[0]) queries.push({ q: `${queries[0].track_name} ${queries[0].artist_name}`.trim() });
   for (const params of queries) {
@@ -201,7 +206,9 @@ async function fetchLyrics(track, duration) {
       }
     }
   }
-  if (!PYTHON_FALLBACK) return null;
+  // syncedlyrics returns its best guess without checking it's the same song, so only trust it when a
+  // music app gave us an exact title, artist and length to check it against
+  if (!PYTHON_FALLBACK || !allowFallback || !duration) return null;
   const py = await fetchLyricsPython(track);
   if (py && duration && py[py.length - 1].time > duration + 3) return null;
   return py;
@@ -308,9 +315,9 @@ async function setPaletteFromArtwork(url) {
 // --- Poll loop -------------------------------------------------------------
 
 // first candidate with lyrics wins (browser tabs give a few guesses at artist and song)
-async function findLyrics(candidates, duration) {
+async function findLyrics(candidates, duration, allowFallback) {
   for (const c of candidates) {
-    const lyrics = await fetchLyrics(c, duration);
+    const lyrics = await fetchLyrics(c, duration, allowFallback);
     if (lyrics) return lyrics;
   }
   return null;
@@ -351,9 +358,10 @@ async function pollLoop() {
       duration: info.duration,
     });
 
-    const lyrics = cached || await findLyrics(candidates, info.duration);
+    const lyrics = cached || await findLyrics(candidates, info.duration, isMusicApp(m));
 
     if (myGeneration !== fetchGeneration) return;
+    console.error(`[lyrics] ${m.title} / ${m.artist} (${m.app}): ${lyrics ? lyrics.length + ' lines' : 'none found'}`);
 
     if (!lyrics) {
       win.webContents.send('lyrics', null);

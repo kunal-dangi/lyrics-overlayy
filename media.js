@@ -19,10 +19,12 @@ function looksLikeSong(m) {
   return !NOT_SONG.test(m.title);
 }
 
+const isMusicApp = (m) => MUSIC_APPS.test((m && m.app) || '');
+
 // Which (artist, song) pairs to look up. Music apps report them properly; browser tabs (YouTube etc.)
 // report the video title and the channel, so try "Artist - Song" from the title first, then the channel.
 function trackCandidates(m) {
-  if (MUSIC_APPS.test(m.app || '')) return [{ name: m.title, artist: m.artist || '' }];
+  if (isMusicApp(m)) return [{ name: m.title, artist: m.artist || '' }];
   const title = m.title.replace(/^\(\d+\)\s*/, '').replace(/\s*[|｜].*$/, '').trim();
   const channel = (m.artist || '').replace(/\s*-\s*Topic$/i, '').replace(/\s*VEVO$/i, '').replace(/\s+official$/i, '').trim();
   const out = [];
@@ -194,4 +196,4 @@ function stopWatching() {
   if (winWatcher) winWatcher.kill();
 }
 
-module.exports = { getNowPlaying, looksLikeSong, trackCandidates, stopWatching };
+module.exports = { getNowPlaying, looksLikeSong, trackCandidates, isMusicApp, stopWatching };

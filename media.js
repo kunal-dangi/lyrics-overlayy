@@ -143,6 +143,8 @@ while ($true) {
 `;
 
 let winSessions = [];
+let winWatcherOk = false; // the watcher has printed at least one line
+let winWatcherStart = 0;
 let winWatcher = null;
 let stopped = false;
 
@@ -155,13 +157,14 @@ function startWinWatcher() {
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script],
     { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); // open stdin can make PowerShell wait forever
   winWatcher = ps;
+  if (!winWatcherStart) winWatcherStart = Date.now(); // first start only, so a watcher that keeps crashing still hits the 15 s limit
   let buf = '';
   ps.stdout.setEncoding('utf8');
   ps.stdout.on('data', (d) => {
     const lines = (buf + d).split(/\r?\n/);
     buf = lines.pop();
     for (const l of lines) {
-      try { const v = JSON.parse(l); winSessions = Array.isArray(v) ? v : [v]; } catch (e) { console.error('[media] bad watcher line:', l.slice(0, 200)); }
+      try { const v = JSON.parse(l); winSessions = Array.isArray(v) ? v : [v]; if (!winWatcherOk) console.error('[media] watcher is running'); winWatcherOk = true; } catch (e) { console.error('[media] bad watcher line:', l.slice(0, 200)); }
     }
   });
   ps.stderr.on('data', (d) => console.error('[media]', String(d).trim()));
@@ -175,8 +178,47 @@ function startWinWatcher() {
 
 let winCurrent = null; // title|artist of the session we showed last, so two playing tabs don't flip-flop
 
+// Backup, used while the media watcher isn't working: read Spotify's and YouTube tabs' window titles
+// (what 2.1.0 did). Titles have no position, so the song is timed from when we first see it.
+let winClock = { id: null, start: 0, pausedAt: 0 };
+const TITLES_PS = 'Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object Name, MainWindowTitle | ConvertTo-Json -Compress';
+
+function winTitles() {
+  return new Promise((resolve, reject) => {
+    execFile('powershell.exe', ['-NoProfile', '-Command', TITLES_PS], { timeout: 4000, windowsHide: true }, (err, stdout) => {
+      if (err || !stdout.trim()) return reject(new Error('not playing'));
+      let procs;
+      try { procs = [].concat(JSON.parse(stdout.trim())); } catch (e) { return reject(e); }
+      let title = '', artist = '', app = '';
+      const spotify = procs.find((p) => /^spotify$/i.test(p.Name) && p.MainWindowTitle.includes(' - '));
+      const tab = procs.find((p) => /^(chrome|msedge|firefox|brave|opera|vivaldi)$/i.test(p.Name) && / - YouTube/.test(p.MainWindowTitle));
+      if (spotify) {
+        const parts = spotify.MainWindowTitle.split(' - ');
+        artist = parts[0].trim(); title = parts.slice(1).join(' - ').trim(); app = 'Spotify.exe';
+      } else if (tab) {
+        title = tab.MainWindowTitle.replace(/^\(\d+\)\s*/, '').split(' - YouTube')[0].trim(); app = tab.Name; // "Artist - Song" split later
+      }
+      if (!title) {
+        if (winClock.id && !winClock.pausedAt) winClock.pausedAt = Date.now();
+        return reject(new Error('not playing'));
+      }
+      const id = title + '|' + artist;
+      if (id !== winClock.id) winClock = { id, start: Date.now(), pausedAt: 0 };
+      else if (winClock.pausedAt) { winClock.start += Date.now() - winClock.pausedAt; winClock.pausedAt = 0; }
+      resolve({ app, title, artist, artwork: '', isPlaying: true, position: (Date.now() - winClock.start) / 1000, duration: 0 });
+    });
+  });
+}
+
+let usingTitles = false;
+
 async function winNowPlaying() {
   if (!winWatcher) startWinWatcher();
+  // nothing from the watcher 15 s after it started: blocked or unsupported, so use window titles
+  if (!winWatcherOk && Date.now() - winWatcherStart > 15000) {
+    if (!usingTitles) { usingTitles = true; console.error('[media] watcher gave nothing, using window titles instead'); }
+    return winTitles();
+  }
   const key = (s) => s.title + '|' + s.artist;
   const playing = winSessions.filter((s) => s.status === 'Playing' && s.title);
   const s = playing.find((x) => key(x) === winCurrent) || playing[0] || winSessions.find((x) => x.title && key(x) === winCurrent);

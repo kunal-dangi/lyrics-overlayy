@@ -4,6 +4,9 @@
 // Windows: the system media sessions (GlobalSystemMediaTransportControls), read by one long-running
 // PowerShell process. Browsers publish what their tabs play to both of these.
 const { execFile, spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 // --- Song or not? -----------------------------------------------------------
 
@@ -144,20 +147,27 @@ let winWatcher = null;
 let stopped = false;
 
 function startWinWatcher() {
+  // a plain script file, not -EncodedCommand: antivirus often blocks encoded PowerShell from unsigned apps
+  const script = path.join(os.tmpdir(), 'lyrics-overlay-media.ps1');
+  try { fs.writeFileSync(script, '\ufeff' + WIN_WATCHER); } catch (e) { console.error('[media] could not write watcher script:', e.message); }
+  console.error('[media] starting watcher');
   const ps = spawn('powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(WIN_WATCHER, 'utf16le').toString('base64')],
-    { windowsHide: true });
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script],
+    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); // open stdin can make PowerShell wait forever
   winWatcher = ps;
   let buf = '';
   ps.stdout.setEncoding('utf8');
   ps.stdout.on('data', (d) => {
     const lines = (buf + d).split(/\r?\n/);
     buf = lines.pop();
-    for (const l of lines) { try { const v = JSON.parse(l); winSessions = Array.isArray(v) ? v : [v]; } catch (e) { } }
+    for (const l of lines) {
+      try { const v = JSON.parse(l); winSessions = Array.isArray(v) ? v : [v]; } catch (e) { console.error('[media] bad watcher line:', l.slice(0, 200)); }
+    }
   });
   ps.stderr.on('data', (d) => console.error('[media]', String(d).trim()));
   ps.on('error', (e) => console.error('[media] watcher failed:', e.message));
-  ps.on('exit', () => {
+  ps.on('exit', (code) => {
+    console.error('[media] watcher exited with code', code);
     winSessions = [];
     if (!stopped) setTimeout(startWinWatcher, 5000); // ponytail: retries forever on Windows too old for media sessions (pre-1809)
   });
@@ -175,7 +185,8 @@ async function winNowPlaying() {
   const isPlaying = s.status === 'Playing';
   return {
     app: s.app, title: s.title, artist: s.artist, artwork: '', isPlaying,
-    position: s.pos + (isPlaying && s.at ? (Date.now() - s.at) / 1000 : 0),
+    // apps that don't report a timeline send 0001-01-01 as the update time; don't count from that
+    position: (s.pos || 0) + (isPlaying && s.at > 0 ? (Date.now() - s.at) / 1000 : 0),
     duration: s.dur > 0 ? s.dur : 0,
   };
 }

@@ -1,10 +1,20 @@
-const { app, BrowserWindow, screen, nativeImage, nativeTheme, Tray, Menu } = require('electron');
+const { app, BrowserWindow, screen, nativeImage, nativeTheme, Tray, Menu, shell } = require('electron');
 const { globalShortcut } = require('electron');
 const path = require('path');
 const { execFile } = require('child_process');
 const { getNowPlaying, looksLikeSong, trackCandidates, isMusicApp, stopWatching } = require('./media');
 const fs = require('fs');
 const process = require('process');
+
+// Everything reported with console.error also goes to a log file (tray > Open log), since the
+// installed app has no console. Started fresh on each launch.
+const LOG_PATH = path.join(app.getPath('userData'), 'overlay.log');
+try { fs.writeFileSync(LOG_PATH, `started ${new Date().toISOString()} v${app.getVersion()} ${process.platform}\n`); } catch (e) { }
+const consoleError = console.error;
+console.error = (...args) => {
+  consoleError(...args);
+  try { fs.appendFileSync(LOG_PATH, `${new Date().toTimeString().slice(0, 8)} ${args.join(' ')}\n`); } catch (e) { }
+};
 
 const TRANSLATION_CACHE_PATH = path.join(app.getPath('userData'), 'translation-cache.json');
 const TRANSLATE_URL = process.env.TRANSLATE_URL || 'https://lyric-overlay-api.kunaldangi.workers.dev/translate';
@@ -323,6 +333,8 @@ async function findLyrics(candidates, duration, allowFallback) {
   return null;
 }
 
+let lastSeen = '';
+
 async function pollLoop() {
   let m;
   try {
@@ -333,6 +345,11 @@ async function pollLoop() {
 
   // nothing playing, or a film / show / video rather than a song
   const candidates = looksLikeSong(m) ? trackCandidates(m) : [];
+  const seen = m ? `${m.title} / ${m.artist} (${m.app}) ${Math.round(m.duration)}s ${m.isPlaying ? 'playing' : 'paused'}` : 'nothing playing';
+  if (seen !== lastSeen) {
+    lastSeen = seen;
+    console.error('[media]', seen, m && candidates.length === 0 ? '-> skipped, not a song' : '');
+  }
   if (candidates.length === 0) {
     if (win.isVisible()) win.hide();
     currentVideoId = null;
@@ -376,7 +393,7 @@ async function pollLoop() {
     win.webContents.send('lyrics', lyrics);
     // ponytail: on Windows this is a normal window, so it starts above others until you click something.
     // True desktop level there needs parenting to the WorkerW desktop window (native code, untested).
-    if (!win.isVisible()) win.showInactive();
+    if (!win.isVisible()) { win.showInactive(); console.error('[window] shown at', JSON.stringify(win.getBounds())); }
     translateLines(lyrics, track).then((translated) => {
       if (translated !== lyrics) lyricsCache.set(track.videoId, translated);
       if (myGeneration === fetchGeneration) win.webContents.send('lyrics', translated);
@@ -407,6 +424,7 @@ function createTray() {
       click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
     });
   }
+  items.push({ label: 'Open log', click: () => shell.openPath(LOG_PATH) });
   items.push({ label: 'Quit Lyrics Overlay', click: () => app.quit() });
   tray.setContextMenu(Menu.buildFromTemplate(items));
   if (process.platform === 'darwin') app.dock.hide(); // the tray replaces the dock icon

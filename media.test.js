@@ -24,4 +24,8 @@ assert.deepStrictEqual(trackCandidates({ app: 'Chrome', title: 'Blinding Lights'
   [{ artist: 'The Weeknd', name: 'Blinding Lights' }]);
 assert.deepStrictEqual(trackCandidates({ app: 'Chrome', title: 'Hello', artist: 'AdeleVEVO' }),
   [{ artist: 'Adele', name: 'Hello' }]);
+assert.deepStrictEqual(trackCandidates({ app: 'com.google.Chrome', title: 'Arijit Singh - Kesariya - YouTube', artist: '' }),
+  [{ artist: 'Arijit Singh', name: 'Kesariya' }]);
+assert.deepStrictEqual(trackCandidates({ app: 'com.apple.Safari', title: 'A Unique Song | YouTube', artist: '' }),
+  [{ artist: '', name: 'A Unique Song' }]);
 console.log('media ok');

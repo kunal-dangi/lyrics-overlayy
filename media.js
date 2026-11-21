@@ -28,12 +28,19 @@ const isMusicApp = (m) => MUSIC_APPS.test((m && m.app) || '');
 // report the video title and the channel, so try "Artist - Song" from the title first, then the channel.
 function trackCandidates(m) {
   if (isMusicApp(m)) return [{ name: m.title, artist: m.artist || '' }];
-  const title = m.title.replace(/^\(\d+\)\s*/, '').replace(/\s*[|｜].*$/, '').trim();
+  const title = m.title
+    .replace(/^\(\d+\)\s*/, '')
+    .replace(/\s+-\s+(?:YouTube(?: Music)?|SoundCloud|Spotify|Apple Music).*$/i, '')
+    .replace(/\s*[|｜].*$/, '')
+    .trim();
   const channel = (m.artist || '').replace(/\s*-\s*Topic$/i, '').replace(/\s*VEVO$/i, '').replace(/\s+official$/i, '').trim();
   const out = [];
   const dash = title.indexOf(' - ');
   if (dash > 0) out.push({ artist: title.slice(0, dash).trim(), name: title.slice(dash + 3).trim() });
   if (channel) out.push({ artist: channel, name: title });
+  // Browser tabs sometimes only expose a clean song title. Allow it through only when LRCLIB has
+  // one unambiguous exact-title result (see lrclibSearch), never as a fuzzy match.
+  if (out.length === 0 && title) out.push({ artist: '', name: title });
   return out;
 }
 
@@ -78,6 +85,37 @@ const NOW_PLAYING_JXA = `function run(argv) {
   return JSON.stringify(out);
 }`;
 
+// Some browsers only publish MediaRemote data for selected sites. When they don't, ask the
+// browser for the active tab title. This works for the web players that put "Artist - Song" in
+// their tab title (YouTube, YouTube Music, SoundCloud, and similar services).
+const MAC_BROWSER_TAB_JXA = `function run() {
+  const browsers = [
+    ['Google Chrome', 'com.google.Chrome'],
+    ['Microsoft Edge', 'com.microsoft.edgemac'],
+    ['Brave Browser', 'com.brave.Browser'],
+    ['Safari', 'com.apple.Safari']
+  ];
+  for (const [name, id] of browsers) {
+    try {
+      const app = Application(name);
+      if (!app.running()) continue;
+      let title = '', url = '';
+      if (name === 'Safari') {
+        title = app.documents[0].name();
+        url = app.documents[0].URL();
+      } else {
+        const tab = app.windows[0].activeTab();
+        title = tab.title();
+        url = tab.url();
+      }
+      if (title && /https?:\\/\\/(?:www\\.)?(?:youtube\\.com|music\\.youtube\\.com|soundcloud\\.com|open\\.spotify\\.com|music\\.apple\\.com)\\b/i.test(String(url))) {
+        return JSON.stringify({ app: id, title: String(title) });
+      }
+    } catch (e) { }
+  }
+  return '';
+}`;
+
 let macArt = { id: null, url: '' };
 
 function osascript(args) {
@@ -98,17 +136,35 @@ async function spotifyMac() {
   };
 }
 
+async function macBrowserTab() {
+  const out = await osascript(['-l', 'JavaScript', '-e', MAC_BROWSER_TAB_JXA]);
+  if (!out) return null;
+  const tab = JSON.parse(out);
+  return { ...tab, artist: '', artwork: '', isPlaying: true, position: 0, duration: 0 };
+}
+
 async function macNowPlaying() {
   let np = null;
   try {
     const out = await osascript(['-l', 'JavaScript', '-e', NOW_PLAYING_JXA, macArt.id || '']);
     if (out) np = JSON.parse(out);
   } catch (e) { }
-  // Spotify's own position is exact; Now Playing's can lag by seconds
-  if (!np || /spotify/i.test(np.app)) return spotifyMac();
-  if (np.id !== macArt.id) macArt = { id: np.id, url: np.artwork || '' };
-  const position = np.playing && np.at ? np.elapsed + ((Date.now() - np.at) / 1000) * (np.rate || 1) : np.elapsed;
-  return { app: np.app, title: np.title, artist: np.artist, artwork: macArt.url, isPlaying: np.playing, position, duration: np.duration };
+  // Spotify's own position is exact. However, a paused Spotify can remain the local Now Playing
+  // owner while a browser tab is playing, so prefer a browser tab in that specific case.
+  if (np && /spotify/i.test(np.app)) {
+    const spotify = await spotifyMac();
+    if (spotify.isPlaying) return spotify;
+    return await macBrowserTab() || spotify;
+  }
+  if (np) {
+    if (np.id !== macArt.id) macArt = { id: np.id, url: np.artwork || '' };
+    const position = np.playing && np.at ? np.elapsed + ((Date.now() - np.at) / 1000) * (np.rate || 1) : np.elapsed;
+    return { app: np.app, title: np.title, artist: np.artist, artwork: macArt.url, isPlaying: np.playing, position, duration: np.duration };
+  }
+
+  const tab = await macBrowserTab();
+  if (!tab) throw new Error('not playing');
+  return tab;
 }
 
 // --- Windows ----------------------------------------------------------------
@@ -191,12 +247,12 @@ function winTitles() {
       try { procs = [].concat(JSON.parse(stdout.trim())); } catch (e) { return reject(e); }
       let title = '', artist = '', app = '';
       const spotify = procs.find((p) => /^spotify$/i.test(p.Name) && p.MainWindowTitle.includes(' - '));
-      const tab = procs.find((p) => /^(chrome|msedge|firefox|brave|opera|vivaldi)$/i.test(p.Name) && / - YouTube/.test(p.MainWindowTitle));
+      const tab = procs.find((p) => /^(chrome|msedge|firefox|brave|opera|vivaldi)$/i.test(p.Name) && / - (YouTube(?: Music)?|SoundCloud)/i.test(p.MainWindowTitle));
       if (spotify) {
         const parts = spotify.MainWindowTitle.split(' - ');
         artist = parts[0].trim(); title = parts.slice(1).join(' - ').trim(); app = 'Spotify.exe';
       } else if (tab) {
-        title = tab.MainWindowTitle.replace(/^\(\d+\)\s*/, '').split(' - YouTube')[0].trim(); app = tab.Name; // "Artist - Song" split later
+        title = tab.MainWindowTitle.replace(/^\(\d+\)\s*/, '').replace(/\s+-\s+(YouTube(?: Music)?|SoundCloud).*$/i, '').trim(); app = tab.Name; // "Artist - Song" split later
       }
       if (!title) {
         if (winClock.id && !winClock.pausedAt) winClock.pausedAt = Date.now();
@@ -222,7 +278,9 @@ async function winNowPlaying() {
   const key = (s) => s.title + '|' + s.artist;
   const playing = winSessions.filter((s) => s.status === 'Playing' && s.title);
   const s = playing.find((x) => key(x) === winCurrent) || playing[0] || winSessions.find((x) => x.title && key(x) === winCurrent);
-  if (!s) throw new Error('not playing');
+  // A browser can expose its tab title even when it fails to report a playback state to Windows.
+  // In that case the old title reader still gives us a usable "Artist - Song" string.
+  if (!s) return winTitles();
   winCurrent = key(s);
   const isPlaying = s.status === 'Playing';
   return {

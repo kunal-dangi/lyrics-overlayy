@@ -85,6 +85,12 @@ function createWindow() {
   });
 
   win.setIgnoreMouseEvents(true); // click-through
+  if (process.platform === 'win32') {
+    // A toolbar window loses its z-order as soon as another app is focused. Keep the lyrics above
+    // normal windows without taking focus, otherwise the process looks alive but is invisible.
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  }
   win.loadFile('index.html');
   win.webContents.on('did-finish-load', () => {
     if (lastPalette) win.webContents.send('palette', lastPalette);
@@ -193,8 +199,11 @@ async function lrclibSearch(params, duration, track) {
   if (!duration) {
     // no length to check against (Firefox doesn't report it): the title has to match exactly
     const titles = lyricQueries(track).map(([t]) => norm(t));
-    const exact = synced.find((r) => titles.includes(norm(r.trackName)));
-    return exact ? exact.syncedLyrics : null;
+    const exact = synced.filter((r) => titles.includes(norm(r.trackName)));
+    if (exact.length === 0) return null;
+    // Without an artist or a duration, an exact title is safe only when it identifies one artist.
+    if (!track.artist && new Set(exact.map((r) => norm(r.artistName))).size !== 1) return null;
+    return exact[0].syncedLyrics;
   }
   synced.sort((a, b) => Math.abs(a.duration - duration) - Math.abs(b.duration - duration));
   return Math.abs(synced[0].duration - duration) <= DURATION_TOLERANCE ? synced[0].syncedLyrics : null;
